@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE/Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Logs & caches
+*.log
+.cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local config & secrets
+.env
+*.local.json
+*.secret.json
+
+# Data exports
+docs/openapi.json
