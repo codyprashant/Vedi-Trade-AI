@@ -33,3 +33,6 @@ dist/
 
 # Data exports
 docs/openapi.json
+
+# Project docs (requested to ignore)
+Backetesting.md
