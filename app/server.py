@@ -14,9 +14,18 @@ from .env_loader import load_dotenv_file
 from .db import (
     ensure_signals_table,
     ensure_backtesting_tables,
+    ensure_strategy_tables,
+    create_default_gold_strategy_if_missing,
     fetch_recent_signals,
     fetch_backtesting_runs,
     fetch_backtesting_signals_by_run,
+    get_strategies,
+    get_strategy_details,
+    update_indicator_params,
+    update_strategy_weights,
+    update_strategy_schedule,
+    update_strategy_threshold,
+    set_active_strategy,
 )
 from .backtesting import run_manual_backtest, execute_manual_run
 from dotenv import load_dotenv
@@ -389,6 +398,14 @@ async def init_env_and_start_signal_engine():
     except Exception as e:
         print(f"Backtesting tables init failed: {e}")
 
+    # Ensure strategy config tables exist and seed default strategy
+    try:
+        ensure_strategy_tables()
+        create_default_gold_strategy_if_missing()
+        print("Postgres OK: ensured strategy tables and default 'Gold Strategy'.")
+    except Exception as e:
+        print(f"Strategy tables init failed: {e}")
+
     # Start signal engine
     global signal_task, signal_engine_instance
     signal_engine_instance = SignalEngine(fetch_history_df)
@@ -487,3 +504,74 @@ async def backtest_execute(payload: Dict[str, Any]):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Backtest execution failed: {e}")
+
+
+# --- Strategy Configuration API ---
+
+@app.get("/api/config/strategies")
+async def list_strategies():
+    try:
+        return {"strategies": get_strategies()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"List strategies failed: {e}")
+
+
+@app.get("/api/config/strategies/{strategy_id}")
+async def get_strategy(strategy_id: int):
+    try:
+        return get_strategy_details(strategy_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Strategy not found or fetch failed: {e}")
+
+
+@app.patch("/api/config/strategies/{strategy_id}/indicator/{indicator_name}")
+async def update_indicator(strategy_id: int, indicator_name: str, payload: Dict[str, Any]):
+    if "params" not in payload or not isinstance(payload["params"], dict):
+        raise HTTPException(status_code=400, detail="Body must include 'params' as an object")
+    try:
+        update_indicator_params(strategy_id, indicator_name, payload["params"]) 
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Update indicator failed: {e}")
+
+
+@app.patch("/api/config/strategies/{strategy_id}/weights")
+async def update_weights(strategy_id: int, payload: Dict[str, Any]):
+    if "weights" not in payload or not isinstance(payload["weights"], dict):
+        raise HTTPException(status_code=400, detail="Body must include 'weights' as an object")
+    try:
+        update_strategy_weights(strategy_id, payload["weights"]) 
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Update weights failed: {e}")
+
+
+@app.patch("/api/config/strategies/{strategy_id}/schedule")
+async def update_schedule(strategy_id: int, payload: Dict[str, Any]):
+    if "run_interval_seconds" not in payload:
+        raise HTTPException(status_code=400, detail="Body must include 'run_interval_seconds'")
+    try:
+        update_strategy_schedule(strategy_id, int(payload["run_interval_seconds"]))
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Update schedule failed: {e}")
+
+
+@app.patch("/api/config/strategies/{strategy_id}/threshold")
+async def update_threshold(strategy_id: int, payload: Dict[str, Any]):
+    if "signal_threshold" not in payload:
+        raise HTTPException(status_code=400, detail="Body must include 'signal_threshold'")
+    try:
+        update_strategy_threshold(strategy_id, float(payload["signal_threshold"]))
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Update threshold failed: {e}")
+
+
+@app.post("/api/config/strategies/{strategy_id}/activate")
+async def activate_strategy(strategy_id: int):
+    try:
+        set_active_strategy(strategy_id)
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Activate strategy failed: {e}")

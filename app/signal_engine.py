@@ -28,6 +28,7 @@ from .indicators import (
     price_action_direction,
 )
 from .db import insert_signal
+from .db import get_active_strategy_config
 
 
 class SignalEngine:
@@ -47,11 +48,21 @@ class SignalEngine:
 
         while self.running:
             try:
+                # Load active strategy config from DB
+                strategy = get_active_strategy_config()
+                indicator_params = strategy.get("indicator_params", {})
+                weights = strategy.get("weights", {})
+                primary_tf = strategy.get("primary_timeframe", DEFAULT_TIMEFRAME)
+                confirmation_tf = strategy.get("confirmation_timeframe", "1h")
+                trend_tf = strategy.get("trend_timeframe", "4h")
+                run_interval_seconds = int(strategy.get("run_interval_seconds", 5))
+                signal_threshold = float(strategy.get("signal_threshold", SIGNAL_THRESHOLD))
+
                 # Fetch M15/H1/H4 concurrently
                 m15_df, h1_df, h4_df = await asyncio.gather(
-                    asyncio.to_thread(self.fetch_history, DEFAULT_SYMBOL, DEFAULT_TIMEFRAME, DEFAULT_HISTORY_COUNT),
-                    asyncio.to_thread(self.fetch_history, DEFAULT_SYMBOL, "1h", DEFAULT_HISTORY_COUNT),
-                    asyncio.to_thread(self.fetch_history, DEFAULT_SYMBOL, "4h", DEFAULT_HISTORY_COUNT),
+                    asyncio.to_thread(self.fetch_history, DEFAULT_SYMBOL, primary_tf, DEFAULT_HISTORY_COUNT),
+                    asyncio.to_thread(self.fetch_history, DEFAULT_SYMBOL, confirmation_tf, DEFAULT_HISTORY_COUNT),
+                    asyncio.to_thread(self.fetch_history, DEFAULT_SYMBOL, trend_tf, DEFAULT_HISTORY_COUNT),
                 )
 
                 # Basic validation
@@ -60,9 +71,9 @@ class SignalEngine:
                     continue
 
                 # Compute primary indicators (M15)
-                ind = compute_indicators(m15_df)
-                res = evaluate_signals(m15_df, ind)
-                strat = compute_strategy_strength(res)
+                ind = compute_indicators(m15_df, indicator_params)
+                res = evaluate_signals(m15_df, ind, indicator_params)
+                strat = compute_strategy_strength(res, weights)
                 best = best_signal(strat)
                 ts = pd.to_datetime(m15_df.iloc[-1]["time"]).isoformat()
 
@@ -74,7 +85,7 @@ class SignalEngine:
                 h1_ts = h1_df.iloc[-1]["time"]
                 if self.h1_cache is None or str(self.h1_cache.get("ts")) != str(h1_ts):
                     h1_dir = ema_trend_direction(h1_df, short_len=50, long_len=200)
-                    h1_atr_last, h1_atr_mean50 = atr_last_and_mean(h1_df, length=14, mean_window=50)
+                    h1_atr_last, h1_atr_mean50 = atr_last_and_mean(h1_df, length=indicator_params.get("ATR", {}).get("length", 14), mean_window=50, params=indicator_params)
                     self.h1_cache = {
                         "ts": h1_ts,
                         "dir": h1_dir,
@@ -88,7 +99,7 @@ class SignalEngine:
                 h4_ts = h4_df.iloc[-1]["time"]
                 if self.h4_cache is None or str(self.h4_cache.get("ts")) != str(h4_ts):
                     h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
-                    self.h4_cache = {"ts": h4_ts, "dir": h4_dir, "atr": atr_last(h4_df)}
+                    self.h4_cache = {"ts": h4_ts, "dir": h4_dir, "atr": atr_last(h4_df, params=indicator_params)}
                 else:
                     h4_dir = self.h4_cache["dir"]
 
@@ -107,7 +118,7 @@ class SignalEngine:
                     h1_atr_last = float(self.h1_cache["atr_last"])
                     h1_atr_mean50 = float(self.h1_cache["atr_mean50"])
                 else:
-                    h1_atr_last, h1_atr_mean50 = atr_last_and_mean(h1_df, length=14, mean_window=50)
+                    h1_atr_last, h1_atr_mean50 = atr_last_and_mean(h1_df, length=indicator_params.get("ATR", {}).get("length", 14), mean_window=50, params=indicator_params)
                     if self.h1_cache is not None:
                         self.h1_cache["atr_last"] = h1_atr_last
                         self.h1_cache["atr_mean50"] = h1_atr_mean50
@@ -170,33 +181,33 @@ class SignalEngine:
                 alignment_boost = 10.0 if h4_dir == h1_dir else -10.0
 
                 # Price action heuristic over last 5 candles
-                pa_dir = price_action_direction(m15_df, lookback=5)
+                pa_dir = price_action_direction(m15_df, lookback=5, params=indicator_params)
 
                 # Confidence contributions (new spec)
                 contrib_new = {
-                    "RSI": (WEIGHTS["RSI"] if res["RSI"].direction == m15_side else 0),
-                    "MACD": (WEIGHTS["MACD"] if res["MACD"].direction == m15_side else 0),
-                    "STOCH": (WEIGHTS["STOCH"] if res["STOCH"].direction == m15_side else 0),
-                    "BBANDS": (WEIGHTS["BBANDS"] if res["BBANDS"].direction == m15_side else 0),
+                    "RSI": (weights.get("RSI", 0) if res["RSI"].direction == m15_side else 0),
+                    "MACD": (weights.get("MACD", 0) if res["MACD"].direction == m15_side else 0),
+                    "STOCH": (weights.get("STOCH", 0) if res["STOCH"].direction == m15_side else 0),
+                    "BBANDS": (weights.get("BBANDS", 0) if res["BBANDS"].direction == m15_side else 0),
                     "SMA_EMA": (
-                        WEIGHTS["SMA_EMA"]
+                        weights.get("SMA_EMA", 0)
                         if (res["SMA"].direction == m15_side and res["EMA"].direction == m15_side)
                         else 0
                     ),
-                    "MTF": (WEIGHTS["MTF"] if aligns_h1 else 0),
-                    "ATR_STABILITY": (WEIGHTS["ATR_STABILITY"] if volatility_state == "Normal" else 0),
-                    "PRICE_ACTION": (WEIGHTS["PRICE_ACTION"] if pa_dir == m15_side else 0),
+                    "MTF": (weights.get("MTF", 0) if aligns_h1 else 0),
+                    "ATR_STABILITY": (weights.get("ATR_STABILITY", 0) if volatility_state == "Normal" else 0),
+                    "PRICE_ACTION": (weights.get("PRICE_ACTION", 0) if pa_dir == m15_side else 0),
                 }
                 base_strength = float(sum(contrib_new.values()))
 
                 final_strength = min(100.0, base_strength + alignment_boost)
 
                 # Save only when final strength >= threshold
-                if final_strength >= float(SIGNAL_THRESHOLD):
+                if final_strength >= signal_threshold:
                     record: Dict[str, Any] = {
                         "timestamp": ts,
                         "symbol": DEFAULT_SYMBOL,
-                        "timeframe": DEFAULT_TIMEFRAME,
+                        "timeframe": primary_tf,
                         "side": m15_side,
                         "signal_type": m15_side.upper(),
                         "strength": base_strength,  # base strength per new spec
@@ -205,9 +216,9 @@ class SignalEngine:
                         "contributions": best["contributions"],
                         "indicator_contributions": contrib_new,
                         # MTF fields
-                        "primary_timeframe": PRIMARY_TIMEFRAME,
-                        "confirmation_timeframe": CONFIRMATION_TIMEFRAME,
-                        "trend_timeframe": TREND_TIMEFRAME,
+                        "primary_timeframe": primary_tf,
+                        "confirmation_timeframe": confirmation_tf,
+                        "trend_timeframe": trend_tf,
                         "h1_trend_direction": h1_dir,
                         "h4_trend_direction": h4_dir,
                         "alignment_boost": alignment_boost,
@@ -238,6 +249,12 @@ class SignalEngine:
                 await asyncio.sleep(5)
             except Exception as e:
                 print(f"Engine loop error: {e}")
+                await asyncio.sleep(5)
+
+            # Respect configured run interval between iterations
+            try:
+                await asyncio.sleep(run_interval_seconds)
+            except Exception:
                 await asyncio.sleep(5)
 
     def stop(self):

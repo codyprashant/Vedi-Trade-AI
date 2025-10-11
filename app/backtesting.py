@@ -27,17 +27,18 @@ from .db import (
     insert_backtesting_signals_batch,
     insert_backtesting_run,
     fetch_backtesting_signals_by_run,
+    get_active_strategy_config,
 )
 
 
-def _alignment_and_volatility(m15_side: str, h1_df: pd.DataFrame, h4_df: pd.DataFrame) -> Tuple[bool, str, str, str, float, float, bool]:
+def _alignment_and_volatility(m15_side: str, h1_df: pd.DataFrame, h4_df: pd.DataFrame, indicator_params: Dict[str, Dict]) -> Tuple[bool, str, str, str, float, float, bool]:
     h1_dir = ema_trend_direction(h1_df, short_len=50, long_len=200)
     h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
     h1_is_bull = h1_dir == "Bullish"
     aligns_h1 = (m15_side == "buy" and h1_is_bull) or (m15_side == "sell" and not h1_is_bull)
 
     # Volatility classification
-    h1_atr_last, h1_atr_mean50 = atr_last_and_mean(h1_df, length=14, mean_window=50)
+    h1_atr_last, h1_atr_mean50 = atr_last_and_mean(h1_df, length=indicator_params.get("ATR", {}).get("length", 14), mean_window=50, params=indicator_params)
     extreme_vol = h1_atr_last > (3.0 * h1_atr_mean50)
     if h1_atr_last > 1.2 * h1_atr_mean50:
         volatility_state = "High"
@@ -98,6 +99,11 @@ def run_manual_backtest(
     commission_per_trade: float | None = None,
     spread_adjustment: float | None = None,
 ) -> Dict[str, Any]:
+    # Load active strategy config for parameters and weights
+    strategy = get_active_strategy_config()
+    indicator_params = strategy.get("indicator_params", {})
+    weights = strategy.get("weights", {})
+    signal_threshold = float(strategy.get("signal_threshold", SIGNAL_THRESHOLD))
     ts_start = pd.to_datetime(start_date)
     ts_end = pd.to_datetime(end_date)
     manual_run_id = f"manual_run_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}"
@@ -127,14 +133,14 @@ def run_manual_backtest(
         if len(h1_slice) < 50 or len(h4_slice) < 50:
             continue
 
-        ind = compute_indicators(m15_slice)
-        res = evaluate_signals(m15_slice, ind)
+        ind = compute_indicators(m15_slice, indicator_params)
+        res = evaluate_signals(m15_slice, ind, indicator_params)
         best = best_signal({"combined": {"direction": res["EMA"].direction, "strength": 0, "contributions": {}}})
 
         # Determine strategy via existing approach: compute best among strategies
         # Reuse indicators to evaluate combined/trend/momentum strengths
         from .indicators import compute_strategy_strength
-        strat = compute_strategy_strength(res)
+        strat = compute_strategy_strength(res, weights)
         best = best_signal(strat)
 
         if not best or best["direction"] not in ("buy", "sell"):
@@ -142,7 +148,7 @@ def run_manual_backtest(
         m15_side = best["direction"]
 
         aligns_h1, h1_dir, h4_dir, vol_state, h1_atr_last, h1_atr_mean50, extreme = _alignment_and_volatility(
-            m15_side, h1_slice, h4_slice
+            m15_side, h1_slice, h4_slice, indicator_params
         )
         if not aligns_h1 or extreme:
             continue
@@ -151,24 +157,24 @@ def run_manual_backtest(
         entry_price, sl_price, tp_price, sl_pips, tp_pips, rr = _trade_plan(m15_side, close_m15, h1_atr_last, vol_state)
 
         alignment_boost = 10.0 if h4_dir == h1_dir else -10.0
-        pa_dir = price_action_direction(m15_slice, lookback=5)
+        pa_dir = price_action_direction(m15_slice, lookback=5, params=indicator_params)
 
         contrib = {
-            "RSI": (WEIGHTS["RSI"] if res["RSI"].direction == m15_side else 0),
-            "MACD": (WEIGHTS["MACD"] if res["MACD"].direction == m15_side else 0),
-            "STOCH": (WEIGHTS["STOCH"] if res["STOCH"].direction == m15_side else 0),
-            "BBANDS": (WEIGHTS["BBANDS"] if res["BBANDS"].direction == m15_side else 0),
+            "RSI": (weights.get("RSI", 0) if res["RSI"].direction == m15_side else 0),
+            "MACD": (weights.get("MACD", 0) if res["MACD"].direction == m15_side else 0),
+            "STOCH": (weights.get("STOCH", 0) if res["STOCH"].direction == m15_side else 0),
+            "BBANDS": (weights.get("BBANDS", 0) if res["BBANDS"].direction == m15_side else 0),
             "SMA_EMA": (
-                WEIGHTS["SMA_EMA"] if (res["SMA"].direction == m15_side and res["EMA"].direction == m15_side) else 0
+                weights.get("SMA_EMA", 0) if (res["SMA"].direction == m15_side and res["EMA"].direction == m15_side) else 0
             ),
-            "MTF": (WEIGHTS["MTF"] if aligns_h1 else 0),
-            "ATR_STABILITY": (WEIGHTS["ATR_STABILITY"] if vol_state == "Normal" else 0),
-            "PRICE_ACTION": (WEIGHTS["PRICE_ACTION"] if pa_dir == m15_side else 0),
+            "MTF": (weights.get("MTF", 0) if aligns_h1 else 0),
+            "ATR_STABILITY": (weights.get("ATR_STABILITY", 0) if vol_state == "Normal" else 0),
+            "PRICE_ACTION": (weights.get("PRICE_ACTION", 0) if pa_dir == m15_side else 0),
         }
         base_strength = float(sum(contrib.values()))
         final_strength = min(100.0, base_strength + alignment_boost)
 
-        if final_strength >= float(SIGNAL_THRESHOLD):
+        if final_strength >= signal_threshold:
             records.append(
                 {
                     "manual_run_id": manual_run_id,

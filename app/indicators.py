@@ -19,8 +19,8 @@ class IndicatorResult:
     contribution: float  # weight if aligned, else 0
 
 
-def compute_indicators(df: pd.DataFrame) -> Dict[str, pd.Series]:
-    params = INDICATOR_PARAMS
+def compute_indicators(df: pd.DataFrame, params: Dict[str, Dict] | None = None) -> Dict[str, pd.Series]:
+    params = params or INDICATOR_PARAMS
 
     ind = {}
     # RSI
@@ -67,9 +67,8 @@ def _cross_under(prev_a: float, prev_b: float, a: float, b: float) -> bool:
     return prev_a >= prev_b and a < b
 
 
-def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series]) -> Dict[str, IndicatorResult]:
-    params = INDICATOR_PARAMS
-    weights = WEIGHTS
+def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[str, Dict] | None = None) -> Dict[str, IndicatorResult]:
+    params = params or INDICATOR_PARAMS
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -145,7 +144,7 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series]) -> Dict[str, I
     # ATR filter
     atr = float(ind["atr"].iloc[-1])
     atr_ratio = atr / close if close else 0.0
-    atr_ok = atr_ratio >= INDICATOR_PARAMS["ATR"]["min_ratio"]
+    atr_ok = atr_ratio >= params["ATR"]["min_ratio"]
     results["ATR"] = IndicatorResult("buy" if atr_ok else "none", {"atr": atr, "atr_ratio": atr_ratio}, 0)
 
     return results
@@ -155,8 +154,8 @@ def _strength(direction: Direction, contributions: Dict[str, float]) -> float:
     return sum(v for k, v in contributions.items()) if direction in ("buy", "sell") else 0.0
 
 
-def compute_strategy_strength(results: Dict[str, IndicatorResult]) -> Dict[str, Dict]:
-    weights = WEIGHTS
+def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict[str, float] | None = None) -> Dict[str, Dict]:
+    weights = weights or WEIGHTS
 
     # Build contributions for each strategy
     # Trend: SMA/EMA cross + MACD + ATR
@@ -247,23 +246,25 @@ def ema_trend_direction(df: pd.DataFrame, short_len: int = 50, long_len: int = 2
     return "Bullish" if float(ema_s) > float(ema_l) else "Bearish"
 
 
-def atr_last(df: pd.DataFrame, length: int = None) -> float:
+def atr_last(df: pd.DataFrame, length: int = None, params: Dict[str, Dict] | None = None) -> float:
     """Return last ATR value using configured length by default."""
-    l = length or INDICATOR_PARAMS["ATR"]["length"]
+    p = params or INDICATOR_PARAMS
+    l = length or p["ATR"]["length"]
     atr_series = ta.atr(df["high"], df["low"], df["close"], length=l)
     return float(atr_series.iloc[-1])
 
 
-def atr_last_and_mean(df: pd.DataFrame, length: int = None, mean_window: int = 50) -> (float, float):
+def atr_last_and_mean(df: pd.DataFrame, length: int = None, mean_window: int = 50, params: Dict[str, Dict] | None = None) -> (float, float):
     """Return (last ATR, rolling mean of ATR over mean_window)."""
-    l = length or INDICATOR_PARAMS["ATR"]["length"]
+    p = params or INDICATOR_PARAMS
+    l = length or p["ATR"]["length"]
     atr_series = ta.atr(df["high"], df["low"], df["close"], length=l)
     last = float(atr_series.iloc[-1])
     mean = float(atr_series.rolling(mean_window).mean().iloc[-1])
     return last, mean
 
 
-def price_action_direction(df: pd.DataFrame, lookback: int = 5) -> Direction:
+def price_action_direction(df: pd.DataFrame, lookback: int = 5, params: Dict[str, Dict] | None = None) -> Direction:
     """
     Enriched price action heuristic using common patterns:
     - Engulfing (bullish/bearish) using last two candles
@@ -271,7 +272,8 @@ def price_action_direction(df: pd.DataFrame, lookback: int = 5) -> Direction:
     - Trend continuation using EMA20 slope and close position
     Fallback: majority-of-closes with EMA20 filter over `lookback` candles
     """
-    if len(df) < max(lookback, INDICATOR_PARAMS["EMA"]["short"]):
+    p = params or INDICATOR_PARAMS
+    if len(df) < max(lookback, p["EMA"]["short"]):
         return "none"
 
     # Prepare last candles
@@ -284,7 +286,7 @@ def price_action_direction(df: pd.DataFrame, lookback: int = 5) -> Direction:
     lower_wick_last = min(open_last, close_last) - low_last
     upper_wick_last = high_last - max(open_last, close_last)
 
-    ema20_series = ta.ema(df["close"], length=INDICATOR_PARAMS["EMA"]["short"])  # EMA20
+    ema20_series = ta.ema(df["close"], length=p["EMA"]["short"])  # EMA short
     ema20_last = float(ema20_series.iloc[-1])
     ema20_prev3 = float(ema20_series.iloc[-3]) if len(ema20_series) >= 3 else ema20_last
 
