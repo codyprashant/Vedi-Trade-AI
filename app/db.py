@@ -319,10 +319,35 @@ def get_strategy_details(strategy_id: int) -> Dict[str, Any]:
                     (strategy_id,),
                 )
                 w = cur.fetchone()
+                # Build indicator params robustly for both dict and tuple rows
+                indicator_params: Dict[str, Any] = {}
+                for row in inds:
+                    if isinstance(row, dict):
+                        name = row.get("indicator_name")
+                        params = row.get("params")
+                    else:
+                        try:
+                            name, params = row[0], row[1]
+                        except Exception:
+                            name, params = None, None
+                    if name is not None:
+                        indicator_params[name] = params
+
+                # Extract weights robustly
+                weights_val: Dict[str, Any] = {}
+                if w:
+                    if isinstance(w, dict):
+                        weights_val = w.get("weights") or {}
+                    else:
+                        try:
+                            weights_val = w[0] if w[0] else {}
+                        except Exception:
+                            weights_val = {}
+
                 return {
                     **dict(s),
-                    "indicator_params": {row[0]: row[1] for row in inds},
-                    "weights": (dict(w[0]) if w and w[0] else {}),
+                    "indicator_params": indicator_params,
+                    "weights": weights_val,
                 }
     finally:
         _put_conn(conn)

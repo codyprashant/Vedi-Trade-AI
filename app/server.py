@@ -6,6 +6,7 @@ import pandas as pd
 
 import MetaTrader5 as mt5
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import status
 
 from .signal_engine import SignalEngine
@@ -35,6 +36,18 @@ app = FastAPI(
     title="PriceTracker API",
     description="Stream live ticks via WebSocket and fetch OHLCV history via REST.",
     version="0.1.0",
+)
+
+# Enable CORS for frontend dev server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Tracks subscribers per symbol
@@ -84,9 +97,12 @@ TF_MAP = {
     "1m": mt5.TIMEFRAME_M1,
     "5m": mt5.TIMEFRAME_M5,
     "15m": mt5.TIMEFRAME_M15,
+    "m15": mt5.TIMEFRAME_M15,
     "30m": mt5.TIMEFRAME_M30,
     "1h": mt5.TIMEFRAME_H1,
+    "h1": mt5.TIMEFRAME_H1,
     "4h": mt5.TIMEFRAME_H4,
+    "h4": mt5.TIMEFRAME_H4,
     "1d": mt5.TIMEFRAME_D1,
     "1w": mt5.TIMEFRAME_W1,
     "1mo": mt5.TIMEFRAME_MN1,
@@ -190,7 +206,7 @@ async def poll_loop():
 
                 # Broadcast to all subscribers; remove those that fail
                 dead: Set[WebSocket] = set()
-                for ws in sockets:
+                for ws in list(sockets):
                     try:
                         await ws.send_json(payload)
                     except Exception:

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { TrendingUp, TrendingDown, Activity, BarChart3, LineChart, Zap, Clock, Monitor, Sparkles, Wifi, WifiOff, AlertCircle } from "lucide-react";
 import RecentSignalsTable from "../components/trading/RecentSignalsTable";
 import { APP_CONFIG } from "../components/config/appConfig";
@@ -19,6 +19,9 @@ export default function LiveMonitor() {
   const [spread, setSpread] = useState(0); // New state for spread
   const [wsConnected, setWsConnected] = useState(false); // New state for WebSocket connection status
   const [lastUpdate, setLastUpdate] = useState(null); // New state for last update timestamp
+  const [priceIssue, setPriceIssue] = useState(false); // Show UI message when no price received
+  const lastTickAtRef = useRef(null); // Track last real price tick time
+  const wsConnectedRef = useRef(false); // Mirror wsConnected for interval checks
 
   useEffect(() => {
     const fetchLatestSignal = async () => {
@@ -62,6 +65,7 @@ export default function LiveMonitor() {
     let ws;
     let reconnectTimeout;
     let mockPriceIntervalId = null; // To store mock interval ID for cleanup
+    let tickMonitor; // Interval to detect missing ticks while connected
 
     const connectWebSocket = () => {
       // Clear any existing reconnect timeouts before attempting new connection
@@ -78,6 +82,7 @@ export default function LiveMonitor() {
       if (APP_CONFIG.USE_MOCK_DATA) {
         // Mock data simulation for development
         setWsConnected(true);
+        wsConnectedRef.current = true;
         // Initialize currentPrice to a non-zero value for mock data if it's 0
         setCurrentPrice(2350); 
         setPreviousPrice(2350);
@@ -97,6 +102,8 @@ export default function LiveMonitor() {
             setAsk(newAsk);
             setSpread(parseFloat((newAsk - newBid).toFixed(2))); // Calculate and format spread
             setLastUpdate(new Date().toISOString()); // Set last update time
+            lastTickAtRef.current = Date.now();
+            setPriceIssue(false);
             return mockPrice;
           });
         }, 3000); // Update mock price every 3 seconds
@@ -116,6 +123,9 @@ export default function LiveMonitor() {
         ws.onopen = () => {
           console.log('WebSocket connected');
           setWsConnected(true);
+          wsConnectedRef.current = true;
+          lastTickAtRef.current = null;
+          setPriceIssue(false);
           // Clear any pending reconnect timeouts upon successful connection
           if (reconnectTimeout) {
             clearTimeout(reconnectTimeout);
@@ -150,23 +160,29 @@ export default function LiveMonitor() {
               setAsk(newAsk);
               setSpread(parseFloat((newAsk - newBid).toFixed(2))); // Calculate and format spread
               setLastUpdate(data.time || new Date().toISOString()); // Use timestamp from data or current time
+              lastTickAtRef.current = Date.now();
+              setPriceIssue(false);
             }
           } catch (error) {
             console.error('Error parsing WebSocket message:', error);
           }
         };
 
-        ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
+        ws.onerror = (event) => {
+          console.error('WebSocket error event:', event);
           setWsConnected(false);
-          if (ws) {
-            ws.close(); // Force close to trigger onclose and reconnect logic
+          wsConnectedRef.current = false;
+          try {
+            if (ws) ws.close(); // Trigger onclose and reconnect
+          } catch (_) {
+            // Ignore close errors
           }
         };
 
         ws.onclose = (event) => {
           console.log('WebSocket disconnected:', event.code, event.reason);
           setWsConnected(false);
+          wsConnectedRef.current = false;
           
           // Clear any existing reconnect attempts to avoid multiple timers
           if (reconnectTimeout) {
@@ -184,6 +200,7 @@ export default function LiveMonitor() {
         // Fallback to mock data if WebSocket fails to initialize
         console.log('Falling back to mock price data...');
         setWsConnected(true); // Indicate that we are "connected" via mock data
+        wsConnectedRef.current = true;
         setCurrentPrice(2350);
         setPreviousPrice(2350); // Initialize previous price for calculations
 
@@ -196,6 +213,8 @@ export default function LiveMonitor() {
             setAsk(parseFloat((mockPrice + 0.15).toFixed(2))); // Fixed offset from mockPrice
             setSpread(0.30); // Fixed spread
             setLastUpdate(new Date().toISOString());
+            lastTickAtRef.current = Date.now();
+            setPriceIssue(false);
             return mockPrice;
           });
         }, 3000);
@@ -203,6 +222,16 @@ export default function LiveMonitor() {
     };
 
     connectWebSocket(); // Initiate WebSocket connection on component mount
+
+    // Monitor for missing ticks while connected (e.g., MT5 not providing prices)
+    tickMonitor = setInterval(() => {
+      if (wsConnectedRef.current) {
+        const last = lastTickAtRef.current;
+        if (!last || (Date.now() - last > 15000)) {
+          setPriceIssue(true);
+        }
+      }
+    }, 5000);
 
     return () => {
       clearInterval(signalInterval); // Clean up signal polling interval
@@ -214,6 +243,9 @@ export default function LiveMonitor() {
       }
       if (mockPriceIntervalId) {
         clearInterval(mockPriceIntervalId); // Clean up mock interval if it was running
+      }
+      if (tickMonitor) {
+        clearInterval(tickMonitor);
       }
     };
   }, []); // Empty dependency array ensures useEffect runs once on mount and cleans up on unmount
@@ -367,6 +399,16 @@ export default function LiveMonitor() {
               >
                 {currentPrice > 0 ? `$${currentPrice.toFixed(2)}` : '---'} {/* Display price or placeholder */}
               </div>
+
+              {wsConnected && priceIssue && (
+                <div 
+                  className="mt-2 flex items-center justify-center gap-2 p-2 rounded-xl"
+                  style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+                >
+                  <AlertCircle className="w-4 h-4 text-red-400" />
+                  <span className="text-xs text-red-300">Facing some issue while fetching price</span>
+                </div>
+              )}
               
               {currentPrice > 0 && ( // Only show price change if a valid price is available
                 <div 
@@ -784,7 +826,7 @@ export default function LiveMonitor() {
       </div>
 
       {/* Keep existing styles */}
-      <style jsx>{`
+      <style>{`
         @keyframes fadeInUp {
           from {
             opacity: 0;

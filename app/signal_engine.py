@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import traceback
 from typing import Dict, Any, Optional
 
 import pandas as pd
@@ -248,7 +249,9 @@ class SignalEngine:
 
                 await asyncio.sleep(5)
             except Exception as e:
-                print(f"Engine loop error: {e}")
+                err_type = type(e).__name__
+                print(f"Engine loop error [{err_type}]: {e}")
+                traceback.print_exc()
                 await asyncio.sleep(5)
 
             # Respect configured run interval between iterations

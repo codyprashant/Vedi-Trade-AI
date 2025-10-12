@@ -1,7 +1,7 @@
 
 export const APP_CONFIG = {
   // Toggle between mock data and live server
-  USE_MOCK_DATA: true, // Set to false when backend is running on localhost:8000
+  USE_MOCK_DATA: false, // Disabled to use live backend
   
   // Backend API base URL
   API_BASE_URL: 'http://localhost:8000',
