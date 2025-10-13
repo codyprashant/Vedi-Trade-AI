@@ -147,7 +147,8 @@ export default function LiveMonitor() {
             if (data.symbol && data.bid !== undefined && data.ask !== undefined) {
               const newBid = parseFloat(data.bid);
               const newAsk = parseFloat(data.ask);
-              const newPrice = data.last !== undefined ? parseFloat(data.last) : (newBid + newAsk) / 2;
+              const lastVal = data.last !== undefined ? parseFloat(data.last) : NaN;
+              const newPrice = (!isNaN(lastVal) && lastVal > 0) ? lastVal : ((newBid + newAsk) / 2);
               
               setCurrentPrice(prev => {
                 setPreviousPrice(prev); // Store current price as previous
@@ -429,7 +430,7 @@ export default function LiveMonitor() {
               )}
 
               {/* Bid/Ask/Spread Display */}
-              {currentPrice > 0 && ( // Only show if a valid price is available
+              {(bid > 0 || ask > 0) && ( // Show when bid/ask available
                 <div className="grid grid-cols-3 gap-3 mb-4">
                   <div 
                     className="p-2 rounded-xl"

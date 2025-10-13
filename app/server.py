@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Set, Optional, Any
 import pandas as pd
 
@@ -31,6 +31,18 @@ from .db import (
 from .backtesting import run_manual_backtest, execute_manual_run
 from dotenv import load_dotenv
 
+# --- Load environment early so middleware can read .env values ---
+try:
+    # Load custom minimal loader (project-root .env)
+    from .env_loader import load_dotenv_file as _load_env_early
+    _load_env_early()
+except Exception:
+    # If loader isn't available or .env missing, continue gracefully
+    pass
+
+# Also load via python-dotenv to support broader env formats
+load_dotenv()
+
 
 app = FastAPI(
     title="PriceTracker API",
@@ -38,13 +50,29 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Enable CORS for frontend dev server
+# --- CORS configuration (allow_origins from .env via CORS_ALLOW_ORIGINS) ---
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+
+def _parse_cors_origins(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return DEFAULT_CORS_ORIGINS
+    raw = raw.strip()
+    if raw == "*":
+        return ["*"]
+    # Support comma or semicolon separated values
+    parts = [p.strip() for p in raw.replace(";", ",").split(",")]
+    return [p for p in parts if p]
+
+allow_origins_cfg = _parse_cors_origins(os.getenv("CORS_ALLOW_ORIGINS"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allow_origins_cfg,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -198,7 +226,7 @@ async def poll_loop():
 
                 payload = {
                     "symbol": symbol,
-                    "time": datetime.fromtimestamp(tick.time).isoformat(),
+                    "time": datetime.fromtimestamp(tick.time, tz=timezone.utc).isoformat(),
                     "bid": tick.bid,
                     "ask": tick.ask,
                     "last": getattr(tick, "last", None),
@@ -266,8 +294,7 @@ async def history(symbol: str = "XAUUSD", timeframe: str = "15m", count: int = 5
     for r in rates:
         candles.append(
             {
-                "t": datetime.fromtimestamp(int(r["time"]))
-                .isoformat(),
+                "t": datetime.fromtimestamp(int(r["time"]), tz=timezone.utc).isoformat(),
                 "o": float(r["open"]),
                 "h": float(r["high"]),
                 "l": float(r["low"]),
@@ -306,7 +333,7 @@ async def ws_prices(websocket: WebSocket, symbol: str = "XAUUSD"):
             except asyncio.TimeoutError:
                 # Send heartbeat to keep connection healthy
                 try:
-                    await websocket.send_json({"type": "heartbeat", "ts": datetime.utcnow().isoformat()})
+                    await websocket.send_json({"type": "heartbeat", "ts": datetime.now(timezone.utc).isoformat()})
                 except Exception:
                     # If send fails, let the disconnect handler clean up
                     pass

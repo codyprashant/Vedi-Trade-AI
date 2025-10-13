@@ -145,5 +145,45 @@ If you’re setting this up locally and pushing to GitHub:
 
 If using a Personal Access Token (PAT), ensure it has `repo` permissions.
 
+### Backend Start Scripts
+
+Use scripts to create/activate a virtual environment, install dependencies from `requirements.txt`, and start the FastAPI server.
+
+Windows (PowerShell):
+
+```
+./scripts/start_backend_windows.ps1 -Port 8000 -Bind 0.0.0.0 -Reload
+```
+
+- `-Port` sets the port (default `8000`).
+- `-Bind` sets the host bind address (default `0.0.0.0`).
+- `-Reload` enables auto-reload for development.
+- The script uses the venv at `.venv` and installs dependencies if needed.
+
+Linux (bash):
+
+```
+bash ./scripts/start_backend_linux.sh
+```
+
+- Set `PORT=8000` to override the default: `PORT=8001 bash ./scripts/start_backend_linux.sh`.
+- The script creates/uses `.venv`, installs deps, and starts Uvicorn.
+
+Health check (use a separate terminal):
+
+```
+curl http://localhost:8000/health
+```
+
+Expected JSON:
+
+```
+{ "mt5_initialized": true|false, "subscribers": 0, "symbols": {} }
+```
+
+Notes:
+- Ensure `.env` exists at the project root with MT5 and Supabase settings (see Environment section).
+- On Windows, avoid running other commands in the same terminal as the server; use a second terminal for requests/testing.
+
 ## License
 Proprietary. All rights reserved unless explicitly licensed otherwise.
