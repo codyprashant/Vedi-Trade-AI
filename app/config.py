@@ -1,4 +1,18 @@
 DEFAULT_SYMBOL = "XAUUSD"
+DEFAULT_SYMBOLS = [
+    "GC=F",
+    "USDCAD",
+    "USDJPY",
+    "GBPUSD",
+    "AUDUSD",
+    "AUS200",
+    "UK100",
+    "DJ30",
+    "SPX",
+    "NAS100",
+    "GER40",
+    "FRA40",
+]
 DEFAULT_TIMEFRAME = "15m"  # primary analysis timeframe for signals (M15)
 PRIMARY_TIMEFRAME = "M15"
 CONFIRMATION_TIMEFRAME = "H1"

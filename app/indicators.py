@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional
 
+import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
@@ -22,39 +23,93 @@ class IndicatorResult:
 def compute_indicators(df: pd.DataFrame, params: Dict[str, Dict] | None = None) -> Dict[str, pd.Series]:
     params = params or INDICATOR_PARAMS
 
-    ind = {}
+    def _nan_series(name: str) -> pd.Series:
+        return pd.Series([np.nan] * len(df), index=df.index, name=name)
+
+    ind: Dict[str, pd.Series] = {}
+
     # RSI
-    ind["rsi"] = ta.rsi(df["close"], length=params["RSI"]["length"]).rename("rsi")
+    try:
+        rsi = ta.rsi(df["close"], length=params["RSI"]["length"])
+        ind["rsi"] = rsi.rename("rsi") if isinstance(rsi, pd.Series) else _nan_series("rsi")
+    except Exception:
+        ind["rsi"] = _nan_series("rsi")
 
     # MACD
-    macd = ta.macd(
-        df["close"],
-        fast=params["MACD"]["fast"],
-        slow=params["MACD"]["slow"],
-        signal=params["MACD"]["signal"],
-    )
-    ind["macd"] = macd[macd.columns[0]].rename("macd")
-    ind["macd_signal"] = macd[macd.columns[1]].rename("macd_signal")
+    try:
+        macd = ta.macd(
+            df["close"],
+            fast=params["MACD"]["fast"],
+            slow=params["MACD"]["slow"],
+            signal=params["MACD"]["signal"],
+        )
+        if isinstance(macd, pd.DataFrame) and macd.shape[1] >= 2:
+            ind["macd"] = macd[macd.columns[0]].rename("macd")
+            ind["macd_signal"] = macd[macd.columns[1]].rename("macd_signal")
+        else:
+            ind["macd"] = _nan_series("macd")
+            ind["macd_signal"] = _nan_series("macd_signal")
+    except Exception:
+        ind["macd"] = _nan_series("macd")
+        ind["macd_signal"] = _nan_series("macd_signal")
 
     # SMA/EMA
-    ind["sma_short"] = ta.sma(df["close"], length=params["SMA"]["short"]).rename("sma_short")
-    ind["sma_long"] = ta.sma(df["close"], length=params["SMA"]["long"]).rename("sma_long")
-    ind["ema_short"] = ta.ema(df["close"], length=params["EMA"]["short"]).rename("ema_short")
-    ind["ema_long"] = ta.ema(df["close"], length=params["EMA"]["long"]).rename("ema_long")
+    try:
+        sma_s = ta.sma(df["close"], length=params["SMA"]["short"])
+        ind["sma_short"] = sma_s.rename("sma_short") if isinstance(sma_s, pd.Series) else _nan_series("sma_short")
+    except Exception:
+        ind["sma_short"] = _nan_series("sma_short")
+    try:
+        sma_l = ta.sma(df["close"], length=params["SMA"]["long"])
+        ind["sma_long"] = sma_l.rename("sma_long") if isinstance(sma_l, pd.Series) else _nan_series("sma_long")
+    except Exception:
+        ind["sma_long"] = _nan_series("sma_long")
+    try:
+        ema_s = ta.ema(df["close"], length=params["EMA"]["short"])
+        ind["ema_short"] = ema_s.rename("ema_short") if isinstance(ema_s, pd.Series) else _nan_series("ema_short")
+    except Exception:
+        ind["ema_short"] = _nan_series("ema_short")
+    try:
+        ema_l = ta.ema(df["close"], length=params["EMA"]["long"])
+        ind["ema_long"] = ema_l.rename("ema_long") if isinstance(ema_l, pd.Series) else _nan_series("ema_long")
+    except Exception:
+        ind["ema_long"] = _nan_series("ema_long")
 
     # Bollinger Bands
-    bb = ta.bbands(df["close"], length=params["BBANDS"]["length"], std=params["BBANDS"]["std"])
-    ind["bb_low"] = bb[bb.columns[0]].rename("bb_low")
-    ind["bb_mid"] = bb[bb.columns[1]].rename("bb_mid")
-    ind["bb_high"] = bb[bb.columns[2]].rename("bb_high")
+    try:
+        bb = ta.bbands(df["close"], length=params["BBANDS"]["length"], std=params["BBANDS"]["std"])
+        if isinstance(bb, pd.DataFrame) and bb.shape[1] >= 3:
+            ind["bb_low"] = bb[bb.columns[0]].rename("bb_low")
+            ind["bb_mid"] = bb[bb.columns[1]].rename("bb_mid")
+            ind["bb_high"] = bb[bb.columns[2]].rename("bb_high")
+        else:
+            ind["bb_low"] = _nan_series("bb_low")
+            ind["bb_mid"] = _nan_series("bb_mid")
+            ind["bb_high"] = _nan_series("bb_high")
+    except Exception:
+        ind["bb_low"] = _nan_series("bb_low")
+        ind["bb_mid"] = _nan_series("bb_mid")
+        ind["bb_high"] = _nan_series("bb_high")
 
     # Stochastic
-    stoch = ta.stoch(df["high"], df["low"], df["close"], k=params["STOCH"]["k"], d=params["STOCH"]["d"])
-    ind["stoch_k"] = stoch[stoch.columns[0]].rename("stoch_k")
-    ind["stoch_d"] = stoch[stoch.columns[1]].rename("stoch_d")
+    try:
+        stoch = ta.stoch(df["high"], df["low"], df["close"], k=params["STOCH"]["k"], d=params["STOCH"]["d"])
+        if isinstance(stoch, pd.DataFrame) and stoch.shape[1] >= 2:
+            ind["stoch_k"] = stoch[stoch.columns[0]].rename("stoch_k")
+            ind["stoch_d"] = stoch[stoch.columns[1]].rename("stoch_d")
+        else:
+            ind["stoch_k"] = _nan_series("stoch_k")
+            ind["stoch_d"] = _nan_series("stoch_d")
+    except Exception:
+        ind["stoch_k"] = _nan_series("stoch_k")
+        ind["stoch_d"] = _nan_series("stoch_d")
 
     # ATR
-    ind["atr"] = ta.atr(df["high"], df["low"], df["close"], length=params["ATR"]["length"]).rename("atr")
+    try:
+        atr = ta.atr(df["high"], df["low"], df["close"], length=params["ATR"]["length"])
+        ind["atr"] = atr.rename("atr") if isinstance(atr, pd.Series) else _nan_series("atr")
+    except Exception:
+        ind["atr"] = _nan_series("atr")
 
     return ind
 

@@ -4,7 +4,7 @@ set -euo pipefail
 # Resolve project root (parent of scripts directory)
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
-PORT="${PORT:-8000}"
+PORT="${PORT:-8001}"
 
 echo "Project root: $ROOT_DIR"
 
@@ -32,6 +32,6 @@ fi
 echo "Installing dependencies from $REQS_FILE"
 pip install -r "$REQS_FILE"
 
-# Start FastAPI via uvicorn
-echo "Starting backend: uvicorn app.server:app --host 0.0.0.0 --port $PORT"
-exec uvicorn app.server:app --host 0.0.0.0 --port "$PORT"
+# Start FastAPI via uvicorn (Yahoo backend)
+echo "Starting Yahoo backend: uvicorn app.yahoo_server:app --host 0.0.0.0 --port $PORT"
+exec uvicorn app.yahoo_server:app --host 0.0.0.0 --port "$PORT"
