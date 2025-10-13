@@ -6,6 +6,7 @@ import traceback
 from typing import Dict, Any, Optional, List
 
 import pandas as pd
+import math
 
 from .config import (
     DEFAULT_SYMBOL,
@@ -45,6 +46,9 @@ class SignalEngine:
         self.h1_cache_by_symbol: Dict[str, Dict[str, Any]] = {}
         self.h4_cache_by_symbol: Dict[str, Dict[str, Any]] = {}
         self.last_snapshot_ts_by_symbol: Dict[str, pd.Timestamp] = {}
+        # Metrics tracking per symbol
+        self.attempt_counts_by_symbol: Dict[str, int] = {}
+        self.signal_counts_by_symbol: Dict[str, int] = {}
 
     async def run(self):
         self.running = True
@@ -66,6 +70,8 @@ class SignalEngine:
                 # Iterate over configured symbols and evaluate
                 symbols: List[str] = strategy.get("symbols", DEFAULT_SYMBOLS)
                 for sym in symbols:
+                    # Track attempts
+                    self.attempt_counts_by_symbol[sym] = int(self.attempt_counts_by_symbol.get(sym, 0)) + 1
                     # Fetch M15/H1/H4 concurrently for each symbol
                     try:
                         m15_df, h1_df, h4_df = await asyncio.gather(
@@ -89,6 +95,31 @@ class SignalEngine:
                     best = best_signal(strat)
                     ts = pd.to_datetime(m15_df.iloc[-1]["time"]).isoformat()
 
+                    # Compute indicator validity and direction distribution
+                    try:
+                        total_inds = len(res)
+                        valid_inds = 0
+                        buy_cnt = 0
+                        sell_cnt = 0
+                        none_cnt = 0
+                        for name, r in res.items():
+                            vals = list(r.value.values())
+                            is_valid = all(
+                                (v is not None) and (not math.isnan(float(v)))
+                                for v in vals
+                            )
+                            if is_valid:
+                                valid_inds += 1
+                            if r.direction == "buy":
+                                buy_cnt += 1
+                            elif r.direction == "sell":
+                                sell_cnt += 1
+                            else:
+                                none_cnt += 1
+                        valid_pct = round(100.0 * valid_inds / max(1, total_inds), 1)
+                    except Exception:
+                        total_inds, valid_inds, buy_cnt, sell_cnt, none_cnt, valid_pct = 0, 0, 0, 0, 0, 0.0
+
                     # Persist indicator snapshot every 10 minutes per symbol
                     try:
                         ts_dt = pd.to_datetime(m15_df.iloc[-1]["time"])
@@ -107,7 +138,16 @@ class SignalEngine:
                         print(f"Snapshot save failed for {sym}: {snap_err}")
 
                     if not best or best["direction"] not in ("buy", "sell"):
-                        # No actionable signal for this symbol
+                        # No actionable signal for this symbol — log metrics
+                        freq_attempts = int(self.attempt_counts_by_symbol.get(sym, 0))
+                        freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
+                        freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
+                        base_strength = (best["strength"] if best and "strength" in best else None)
+                        print(
+                            f"Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
+                            f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, none:{none_cnt}}} | base_strength {base_strength} | "
+                            f"signal False | insert skipped | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
+                        )
                         continue
 
                     # Cache and compute H1 trend (per symbol)
@@ -263,6 +303,9 @@ class SignalEngine:
                         }
                         try:
                             insert_signal(record)
+                            # Track signal frequency
+                            self.signal_counts_by_symbol[sym] = int(self.signal_counts_by_symbol.get(sym, 0)) + 1
+                            insert_status = "ok"
                             print(
                                 f"{sym} Signal: {m15_side.upper()} — Entry {entry_price:.2f}, SL {stop_loss_price:.2f}, TP {take_profit_price:.2f} | "
                                 f"Volatility {volatility_state}, RR {rr:.2f}, Final {final_strength:.1f}% | "
@@ -270,7 +313,19 @@ class SignalEngine:
                                 f"Contrib {contrib_new}"
                             )
                         except Exception as e:
+                            insert_status = f"error: {e}"
                             print(f"Save failed for {sym}: {e}")
+
+                        # Always log metrics for this compute
+                        freq_attempts = int(self.attempt_counts_by_symbol.get(sym, 0))
+                        freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
+                        freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
+                        base_strength = (best["strength"] if best and "strength" in best else None)
+                        print(
+                            f"Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
+                            f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, none:{none_cnt}}} | base_strength {base_strength} | "
+                            f"signal True | insert {insert_status} | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
+                        )
 
 
                 # Yield control briefly between symbols
