@@ -162,8 +162,155 @@ Response (example):
 }
 ```
 
+## Strategy Configuration
+
+The system supports dynamic strategy configuration through dedicated API endpoints. These allow you to manage multiple strategies, update their parameters, and control which strategy is active.
+
+### List All Strategies
+
+- Endpoint: `GET /api/config/strategies`
+- Returns basic information about all available strategies.
+
+Response (example):
+
+```json
+{
+  "strategies": [
+    {
+      "id": 1,
+      "name": "Gold Strategy",
+      "is_active": true,
+      "signal_threshold": 0.9,
+      "run_interval_seconds": 60
+    }
+  ]
+}
+```
+
+### Get Strategy Details
+
+- Endpoint: `GET /api/config/strategies/{strategy_id}`
+- Returns complete strategy configuration including indicators and weights.
+
+Response (example):
+
+```json
+{
+  "strategy": {
+    "id": 1,
+    "name": "Gold Strategy",
+    "description": "Default gold strategy",
+    "timeframes": ["M15", "H1", "H4"],
+    "signal_threshold": 0.9,
+    "run_interval_seconds": 60,
+    "is_active": true
+  },
+  "indicator_params": {
+    "RSI": { "period": 14, "overbought": 70, "oversold": 30 },
+    "MACD": { "fast": 12, "slow": 26, "signal": 9 },
+    "SMA": { "short": 20, "long": 50 },
+    "EMA": { "short": 20, "long": 50 },
+    "BBANDS": { "length": 20, "stddev": 2 },
+    "STOCH": { "k": 14, "d": 3, "overbought": 80, "oversold": 20 },
+    "ATR": { "length": 14 },
+    "PRICE_ACTION": { "engulfing_lookback": 5, "pinbar_lookback": 5 }
+  },
+  "weights": {
+    "RSI": 0.15,
+    "MACD": 0.15,
+    "STOCH": 0.1,
+    "BBANDS": 0.1,
+    "SMA_EMA": 0.2,
+    "MTF": 0.15,
+    "ATR_STABILITY": 0.075,
+    "PRICE_ACTION": 0.075
+  }
+}
+```
+
+### Update Indicator Parameters
+
+- Endpoint: `PATCH /api/config/strategies/{strategy_id}/indicator/{indicator_name}`
+- Updates parameters for a specific indicator.
+
+Request body (example for RSI):
+
+```json
+{
+  "params": {
+    "period": 14,
+    "overbought": 75,
+    "oversold": 25
+  }
+}
+```
+
+### Update Strategy Weights
+
+- Endpoint: `PATCH /api/config/strategies/{strategy_id}/weights`
+- Updates the contribution weights for different indicators.
+
+Request body:
+
+```json
+{
+  "weights": {
+    "RSI": 0.2,
+    "MACD": 0.2,
+    "STOCH": 0.1,
+    "BBANDS": 0.1,
+    "SMA_EMA": 0.15,
+    "MTF": 0.15,
+    "ATR_STABILITY": 0.05,
+    "PRICE_ACTION": 0.05
+  }
+}
+```
+
+### Update Run Schedule
+
+- Endpoint: `PATCH /api/config/strategies/{strategy_id}/schedule`
+- Updates how frequently the strategy engine runs.
+
+Request body:
+
+```json
+{
+  "run_interval_seconds": 120
+}
+```
+
+### Update Signal Threshold
+
+- Endpoint: `PATCH /api/config/strategies/{strategy_id}/threshold`
+- Updates the minimum strength required for signal generation.
+
+Request body:
+
+```json
+{
+  "signal_threshold": 0.85
+}
+```
+
+### Activate Strategy
+
+- Endpoint: `POST /api/config/strategies/{strategy_id}/activate`
+- Activates the specified strategy (deactivates all others).
+- No request body required.
+
+Response:
+
+```json
+{
+  "status": "ok"
+}
+```
+
 ## Notes
 
 - Canonical symbols are enforced across all endpoints; send one of the allowed list.
 - The latest signal endpoint returns the row as saved in `public.signals` including `indicators` and `indicator_contributions`.
 - The manual compute endpoint responds even when strength is low; database inserts respect the configured `signal_threshold`.
+- Strategy configuration changes take effect immediately for new signal computations.
+- Only one strategy can be active at a time; activating a strategy automatically deactivates others.

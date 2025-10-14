@@ -50,6 +50,9 @@ Base URL: `http://localhost:8001`
 - `WS /ws/prices?symbol=XAUUSD` — subscribe to live quotes.
 - `GET /signals/recent?limit=20&min_strength=50` — recent signals from Postgres.
 - `GET /indicators/latest?symbols=XAUUSD,SPX` — latest indicator snapshots per symbol.
+- `GET /api/config/strategies` — list all trading strategies.
+- `PATCH /api/config/strategies/{id}/weights` — update strategy indicator weights.
+- `POST /api/config/strategies/{id}/activate` — activate a trading strategy.
 - `GET /openapi.json` — live OpenAPI spec.
 - `GET /docs` — Swagger UI.
 

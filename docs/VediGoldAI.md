@@ -147,6 +147,33 @@ The system exposes REST endpoints for health, historical data, signals, and back
 - `GET /signals/recent?limit=20`: Recent high-confidence signals from Postgres.
 - WebSocket `GET /ws/prices?symbol=XAUUSD`: Streams live tick JSON payloads; sends heartbeats.
 
+### Strategy Configuration Management
+
+The system supports dynamic strategy configuration through dedicated API endpoints, allowing real-time adjustment of trading parameters without server restarts.
+
+#### Strategy Management
+- `GET /api/config/strategies`: List all available strategies with basic information (id, name, active status, threshold, run interval).
+- `GET /api/config/strategies/{strategy_id}`: Retrieve complete strategy details including indicator parameters, weights, and configuration.
+- `POST /api/config/strategies/{strategy_id}/activate`: Activate a specific strategy (deactivates all others).
+
+#### Parameter Configuration
+- `PATCH /api/config/strategies/{strategy_id}/indicator/{indicator_name}`: Update parameters for specific indicators (RSI periods, MACD settings, Bollinger Band parameters, etc.).
+- `PATCH /api/config/strategies/{strategy_id}/weights`: Modify contribution weights for different indicators and components (RSI, MACD, SMA_EMA, BBANDS, STOCH, MTF, ATR_STABILITY, PRICE_ACTION).
+- `PATCH /api/config/strategies/{strategy_id}/threshold`: Adjust the minimum signal strength required for persistence (`SIGNAL_THRESHOLD`).
+- `PATCH /api/config/strategies/{strategy_id}/schedule`: Configure the signal engine run frequency (`run_interval_seconds`).
+
+#### Configuration Features
+- **Real-time Updates**: Changes take effect immediately for new signal computations.
+- **Multi-strategy Support**: Manage multiple trading strategies with different configurations.
+- **Parameter Validation**: API endpoints validate parameter ranges and types.
+- **Atomic Operations**: Each configuration change is applied atomically to maintain consistency.
+
+#### Configurable Parameters
+- **Indicator Settings**: RSI periods and thresholds, MACD fast/slow/signal periods, SMA/EMA lengths, Bollinger Band parameters, Stochastic settings, ATR periods, price action lookback windows.
+- **Strategy Weights**: Individual contribution weights for each indicator and component (must sum to appropriate totals).
+- **Operational Settings**: Signal threshold (0.0-1.0), run interval (seconds), alignment boost values.
+- **Risk Management**: Volatility classification thresholds, trade plan multipliers, R:R ratio bounds.
+
 ### Manual Backtesting API
 
 - `POST /api/backtest/manual/generate`
