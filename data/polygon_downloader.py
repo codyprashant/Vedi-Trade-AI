@@ -46,6 +46,10 @@ def get_s3_client():
         or os.getenv("POLYGON_SECRET_ACCESS_KEY")
         or os.getenv("aws_secret_access_key")
     )
+    session_token = (
+        os.getenv("POLYGON_AWS_SESSION_TOKEN")
+        or os.getenv("aws_session_token")
+    )
     endpoint = os.getenv("POLYGON_ENDPOINT_URL") or DEFAULT_ENDPOINT
     region = os.getenv("POLYGON_REGION") or DEFAULT_REGION
 
@@ -57,11 +61,13 @@ def get_s3_client():
     session = boto3.Session(
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
-        # region_name=region,
+        aws_session_token=session_token,
+        region_name=region,
     )
     s3 = session.client(
         "s3",
         endpoint_url=endpoint,
+        region_name=region,
         config=Config(signature_version="s3v4"),
     )
     return s3
@@ -88,8 +94,44 @@ def download_object(bucket: str, object_key: str, out_dir: Path):
     local_file_name = Path(object_key).name
     local_file_path = out_dir / local_file_name
     print(f"Downloading s3://{bucket}/{object_key} -> {local_file_path}")
-    s3.download_file(bucket, object_key, str(local_file_path))
-    print("Download complete.")
+    try:
+        # Standard transfer manager path (performs HEAD first)
+        s3.download_file(bucket, object_key, str(local_file_path))
+        print("Download complete.")
+        return
+    except Exception as e:
+        from botocore.exceptions import ClientError
+        # If HEAD is forbidden but GET is allowed, fallback to streaming via get_object
+        if isinstance(e, ClientError):
+            err = e.response.get("Error", {})
+            code = err.get("Code")
+            msg = err.get("Message")
+            if code in {"403", "AccessDenied"}:
+                print("HEAD denied; attempting GET fallback...")
+                try:
+                    resp = s3.get_object(Bucket=bucket, Key=object_key)
+                    body = resp["Body"]
+                    with open(local_file_path, "wb") as f:
+                        # Stream in 8MB chunks to avoid large memory usage
+                        for chunk in iter(lambda: body.read(8 * 1024 * 1024), b""):
+                            f.write(chunk)
+                    print("Download complete via GET fallback.")
+                    return
+                except Exception as e2:
+                    if isinstance(e2, ClientError):
+                        err2 = e2.response.get("Error", {})
+                        code2 = err2.get("Code")
+                        msg2 = err2.get("Message")
+                        print("Access denied when downloading object. Please check:")
+                        print("- Polygon flatfiles credentials (POLYGON_AWS_ACCESS_KEY_ID / POLYGON_AWS_SECRET_ACCESS_KEY)")
+                        print("- If provided, POLYGON_AWS_SESSION_TOKEN is set and valid")
+                        print("- Bucket 'flatfiles' and region 'us-east-1' (POLYGON_REGION) are correct")
+                        print("- Your subscription entitles access to the prefix/object key")
+                        print("- Verify the key exists using 'list' with the parent prefix")
+                        print(f"Server message: {msg2}")
+                    raise
+        # Not a ClientError or different failure; re-raise original
+        raise
 
 
 def build_parser():

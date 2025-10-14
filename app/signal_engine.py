@@ -80,12 +80,12 @@ class SignalEngine:
                             asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
                         )
                     except Exception as fetch_err:
-                        print(f"Fetch failed for {sym}: {fetch_err}")
+                        print(f"Signal logs - Fetch failed for {sym}: {fetch_err}")
                         continue
 
                     # Basic validation
                     if any(df is None or len(df) < 50 for df in (m15_df, h1_df, h4_df)):
-                        print(f"Insufficient data for {sym}; skipping.")
+                        print(f"Signal logs - Insufficient data for {sym}; skipping.")
                         continue
 
                     # Compute primary indicators (M15)
@@ -135,7 +135,7 @@ class SignalEngine:
                             })
                             self.last_snapshot_ts_by_symbol[sym] = ts_dt
                     except Exception as snap_err:
-                        print(f"Snapshot save failed for {sym}: {snap_err}")
+                        print(f"Signal logs - Snapshot save failed for {sym}: {snap_err}")
 
                     if not best or best["direction"] not in ("buy", "sell"):
                         # No actionable signal for this symbol — log metrics
@@ -144,7 +144,7 @@ class SignalEngine:
                         freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
                         base_strength = (best["strength"] if best and "strength" in best else None)
                         print(
-                            f"Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
+                            f"Signal logs - Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
                             f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, none:{none_cnt}}} | base_strength {base_strength} | "
                             f"signal False | insert skipped | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
                         )
@@ -307,14 +307,14 @@ class SignalEngine:
                             self.signal_counts_by_symbol[sym] = int(self.signal_counts_by_symbol.get(sym, 0)) + 1
                             insert_status = "ok"
                             print(
-                                f"{sym} Signal: {m15_side.upper()} — Entry {entry_price:.2f}, SL {stop_loss_price:.2f}, TP {take_profit_price:.2f} | "
+                                f"Signal logs - {sym} Signal: {m15_side.upper()} — Entry {entry_price:.2f}, SL {stop_loss_price:.2f}, TP {take_profit_price:.2f} | "
                                 f"Volatility {volatility_state}, RR {rr:.2f}, Final {final_strength:.1f}% | "
                                 f"H1 {h1_dir}, H4 {h4_dir} (boost {alignment_boost:+.0f}%) | "
                                 f"Contrib {contrib_new}"
                             )
                         except Exception as e:
                             insert_status = f"error: {e}"
-                            print(f"Save failed for {sym}: {e}")
+                            print(f"Signal logs - Save failed for {sym}: {e}")
 
                         # Always log metrics for this compute
                         freq_attempts = int(self.attempt_counts_by_symbol.get(sym, 0))
@@ -322,7 +322,7 @@ class SignalEngine:
                         freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
                         base_strength = (best["strength"] if best and "strength" in best else None)
                         print(
-                            f"Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
+                            f"Signal logs - Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
                             f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, none:{none_cnt}}} | base_strength {base_strength} | "
                             f"signal True | insert {insert_status} | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
                         )
@@ -332,7 +332,7 @@ class SignalEngine:
                 await asyncio.sleep(0)
             except Exception as e:
                 err_type = type(e).__name__
-                print(f"Engine loop error [{err_type}]: {e}")
+                print(f"Signal logs - Engine loop error [{err_type}]: {e}")
                 traceback.print_exc()
                 await asyncio.sleep(5)
 
