@@ -26,10 +26,10 @@ DEFAULT_HISTORY_COUNT = 500
 
 # Indicator parameters
 INDICATOR_PARAMS = {
-    "RSI": {"length": 14, "overbought": 70, "oversold": 30},
+    "RSI": {"periods": [9, 14], "overbought": 70, "oversold": 30},
     "MACD": {"fast": 12, "slow": 26, "signal": 9},
-    "SMA": {"short": 50, "long": 200},
-    "EMA": {"short": 20, "long": 50},
+    "SMA": {"periods": [20, 50, 200]},
+    "EMA": {"periods": [9, 21, 55]},
     "BBANDS": {"length": 20, "std": 2},
     "STOCH": {"k": 14, "d": 3, "oversold": 20, "overbought": 80},
     "ATR": {"length": 14, "min_ratio": 0.002},  # 0.2% of price as minimal volatility

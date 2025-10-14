@@ -104,6 +104,77 @@ npm run dev
 
 Vite dev server runs on `http://localhost:3000`.
 
+## Yahoo Finance fast_info Response Structure
+
+The WebSocket live price data is sourced from Yahoo Finance's `fast_info` object. Below is the complete response structure for different asset types:
+
+### XAUUSD (Gold Futures - GC=F)
+
+The `fast_info` object for XAUUSD provides 20 data fields:
+
+```json
+{
+  "currency": "USD",                          // Base currency (string)
+  "dayHigh": 4190.89990234375,               // Today's high price (float)
+  "dayLow": 4105.0,                          // Today's low price (float)
+  "exchange": "CMX",                         // Exchange code (string)
+  "fiftyDayAverage": 3607.9079931640626,     // 50-day moving average (float)
+  "lastPrice": 4159.60009765625,             // Most recent price (float) - Used as 'bid' in WebSocket
+  "lastVolume": 396022,                      // Last trade volume (int)
+  "marketCap": null,                         // Market capitalization (null for futures)
+  "open": 4130.89990234375,                  // Today's opening price (float)
+  "previousClose": 4175.2998046875,          // Previous day's close (float)
+  "quoteType": "FUTURE",                     // Asset type (string)
+  "regularMarketPreviousClose": 4108.60009765625, // Regular market previous close (float)
+  "shares": null,                            // Outstanding shares (null for futures)
+  "tenDayAverageVolume": 2007,               // 10-day average volume (int)
+  "threeMonthAverageVolume": 3591,           // 3-month average volume (int)
+  "timezone": "America/New_York",            // Market timezone (string)
+  "twoHundredDayAverage": 3240.0207050978534, // 200-day moving average (float)
+  "yearChange": 0.5437740468984122,          // Year-to-date change percentage (float)
+  "yearHigh": 4111.0,                        // 52-week high (float)
+  "yearLow": 2554.199951171875               // 52-week low (float)
+}
+```
+
+### WebSocket Response Mapping
+
+Our WebSocket response maps the following fields from `fast_info`:
+
+| WebSocket Field | fast_info Field | Description |
+|----------------|-----------------|-------------|
+| `bid` | `lastPrice` | Current market price |
+| `previousClose` | `previousClose` | Previous day's closing price |
+| `marketState` | ❌ **Not Available** | Market state (null for XAUUSD) |
+| `regularMarketPrice` | ❌ **Not Available** | Regular market price (null for XAUUSD) |
+
+### Important Notes
+
+1. **Missing Fields**: `marketState` and `regularMarketPrice` are **not provided** by Yahoo Finance for futures symbols like XAUUSD (GC=F). This is expected behavior, not an error.
+
+2. **Asset Type Differences**: Different asset types (stocks, forex, indices, futures) may have different available fields in their `fast_info` response.
+
+3. **Data Types**: 
+   - Prices are returned as `float` values
+   - Volumes are returned as `int` values  
+   - Some fields may be `null` depending on the asset type
+   - Strings are used for metadata (currency, exchange, timezone, etc.)
+
+4. **Symbol Resolution**: 
+   - `XAUUSD` → `GC=F` (Gold futures)
+   - `USDCAD` → `USDCAD=X` (Forex pair)
+   - `SPX` → `^GSPC` (S&P 500 index)
+
+### Testing fast_info Response
+
+To test the complete `fast_info` response for any symbol, run:
+
+```bash
+python test_fastinfo_complete.py
+```
+
+This generates a detailed JSON report (`fastinfo_test_results.json`) with the complete response structure for multiple asset types.
+
 ## Notes
 - Polling throttle set to 120 seconds for Yahoo limits.
 - Timeframe keys `4h` and `h4` map consistently to `4h` resampling.

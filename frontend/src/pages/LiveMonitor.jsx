@@ -111,42 +111,56 @@ export default function LiveMonitor() {
             setMarketState("REGULAR"); // Mock market state
             setRegularMarketPrice(mockPrice + (Math.random() * 0.5 - 0.25)); // Mock regular market price with slight variation
             
-            // Simulate indicators
-            setIndicators({
-              rsi: 45.2 + (Math.random() * 20 - 10),
+            // Simulate indicators with new periods
+            const mockIndicators = {
+              rsi_9: 45.2 + (Math.random() * 20 - 10),
+              rsi_14: 48.5 + (Math.random() * 20 - 10),
+              rsi: 48.5 + (Math.random() * 20 - 10), // Backward compatibility
               macd: 1.23 + (Math.random() * 0.5 - 0.25),
-              ema_20: mockPrice + (Math.random() * 2 - 1),
+              macd_signal: 0.98 + (Math.random() * 0.3 - 0.15),
+              sma_20: mockPrice + (Math.random() * 2 - 1),
               sma_50: mockPrice + (Math.random() * 3 - 1.5),
+              sma_200: mockPrice + (Math.random() * 5 - 2.5),
+              ema_9: mockPrice + (Math.random() * 1.5 - 0.75),
+              ema_21: mockPrice + (Math.random() * 2 - 1),
+              ema_55: mockPrice + (Math.random() * 3 - 1.5),
               bb_upper: mockPrice + 15 + (Math.random() * 5),
-              bb_lower: mockPrice - 15 + (Math.random() * 5)
+              bb_lower: mockPrice - 15 + (Math.random() * 5),
+              atr: 7.5 + (Math.random() * 2 - 1)
+            };
+            setIndicators(mockIndicators);
+            
+            // Update indicator states for display
+            setRsi({
+              rsi9: mockIndicators.rsi_9.toFixed(2),
+              rsi14: mockIndicators.rsi_14.toFixed(2)
+            });
+            setMacd({
+              macd: mockIndicators.macd.toFixed(4),
+              signal: mockIndicators.macd_signal.toFixed(4),
+              histogram: (mockIndicators.macd - mockIndicators.macd_signal).toFixed(4)
+            });
+            setSma({
+              sma20: mockIndicators.sma_20.toFixed(2),
+              sma50: mockIndicators.sma_50.toFixed(2),
+              sma200: mockIndicators.sma_200.toFixed(2)
+            });
+            setEma({
+              ema9: mockIndicators.ema_9.toFixed(2),
+              ema21: mockIndicators.ema_21.toFixed(2),
+              ema55: mockIndicators.ema_55.toFixed(2)
             });
             
             // Simulate evaluation
-            const signals = ['buy', 'sell', 'hold', 'strong_buy', 'strong_sell'];
+            const signals = ['buy', 'sell', 'none'];
             setEvaluation({
-              rsi: signals[Math.floor(Math.random() * signals.length)],
-              macd: signals[Math.floor(Math.random() * signals.length)],
-              ema_trend: Math.random() > 0.5 ? 'bullish' : 'bearish',
-              overall: signals[Math.floor(Math.random() * signals.length)]
-            });
-            
-            // Simulate indicators
-            setIndicators({
-              rsi: 45.2 + (Math.random() * 20 - 10),
-              macd: 1.23 + (Math.random() * 0.5 - 0.25),
-              ema_20: mockPrice + (Math.random() * 2 - 1),
-              sma_50: mockPrice + (Math.random() * 3 - 1.5),
-              bb_upper: mockPrice + 15 + (Math.random() * 5),
-              bb_lower: mockPrice - 15 + (Math.random() * 5)
-            });
-            
-            // Simulate evaluation
-            const signals = ['buy', 'sell', 'hold', 'strong_buy', 'strong_sell'];
-            setEvaluation({
-              rsi: signals[Math.floor(Math.random() * signals.length)],
-              macd: signals[Math.floor(Math.random() * signals.length)],
-              ema_trend: Math.random() > 0.5 ? 'bullish' : 'bearish',
-              overall: signals[Math.floor(Math.random() * signals.length)]
+              RSI: signals[Math.floor(Math.random() * signals.length)],
+              MACD: signals[Math.floor(Math.random() * signals.length)],
+              SMA: signals[Math.floor(Math.random() * signals.length)],
+              EMA: signals[Math.floor(Math.random() * signals.length)],
+              BBANDS: signals[Math.floor(Math.random() * signals.length)],
+              STOCH: signals[Math.floor(Math.random() * signals.length)],
+              ATR: 'none'
             });
             
             setLastUpdate(new Date().toISOString()); // Set last update time
@@ -213,6 +227,30 @@ export default function LiveMonitor() {
               setRegularMarketPrice(data.regularMarketPrice ? parseFloat(data.regularMarketPrice) : null);
               setIndicators(data.indicators || null);
               setEvaluation(data.evaluation || null);
+              
+              // Update live indicator states from WebSocket data
+              if (data.indicators) {
+                setRsi({
+                  rsi9: data.indicators.rsi_9 ? data.indicators.rsi_9.toFixed(2) : '0',
+                  rsi14: data.indicators.rsi_14 ? data.indicators.rsi_14.toFixed(2) : '0'
+                });
+                setMacd({
+                  macd: data.indicators.macd ? data.indicators.macd.toFixed(4) : '0',
+                  signal: data.indicators.macd_signal ? data.indicators.macd_signal.toFixed(4) : '0',
+                  histogram: data.indicators.macd && data.indicators.macd_signal ? 
+                    (data.indicators.macd - data.indicators.macd_signal).toFixed(4) : '0'
+                });
+                setSma({
+                  sma20: data.indicators.sma_20 ? data.indicators.sma_20.toFixed(2) : '0',
+                  sma50: data.indicators.sma_50 ? data.indicators.sma_50.toFixed(2) : '0',
+                  sma200: data.indicators.sma_200 ? data.indicators.sma_200.toFixed(2) : 'N/A'
+                });
+                setEma({
+                  ema9: data.indicators.ema_9 ? data.indicators.ema_9.toFixed(2) : '0',
+                  ema21: data.indicators.ema_21 ? data.indicators.ema_21.toFixed(2) : '0',
+                  ema55: data.indicators.ema_55 ? data.indicators.ema_55.toFixed(2) : '0'
+                });
+              }
               
               setLastUpdate(data.time || new Date().toISOString()); // Use timestamp from data or current time
               lastTickAtRef.current = Date.now();

@@ -28,11 +28,19 @@ def compute_indicators(df: pd.DataFrame, params: Dict[str, Dict] | None = None) 
 
     ind: Dict[str, pd.Series] = {}
 
-    # RSI
+    # RSI - Multiple periods
     try:
-        rsi = ta.rsi(df["close"], length=params["RSI"]["length"])
-        ind["rsi"] = rsi.rename("rsi") if isinstance(rsi, pd.Series) else _nan_series("rsi")
+        rsi_periods = params["RSI"].get("periods", [14])
+        for period in rsi_periods:
+            rsi = ta.rsi(df["close"], length=period)
+            key = f"rsi_{period}"
+            ind[key] = rsi.rename(key) if isinstance(rsi, pd.Series) else _nan_series(key)
+        # Keep backward compatibility with single RSI
+        if 14 in rsi_periods:
+            ind["rsi"] = ind["rsi_14"]
     except Exception:
+        for period in params["RSI"].get("periods", [14]):
+            ind[f"rsi_{period}"] = _nan_series(f"rsi_{period}")
         ind["rsi"] = _nan_series("rsi")
 
     # MACD
@@ -53,26 +61,43 @@ def compute_indicators(df: pd.DataFrame, params: Dict[str, Dict] | None = None) 
         ind["macd"] = _nan_series("macd")
         ind["macd_signal"] = _nan_series("macd_signal")
 
-    # SMA/EMA
+    # SMA - Multiple periods
     try:
-        sma_s = ta.sma(df["close"], length=params["SMA"]["short"])
-        ind["sma_short"] = sma_s.rename("sma_short") if isinstance(sma_s, pd.Series) else _nan_series("sma_short")
+        sma_periods = params["SMA"].get("periods", [50, 200])
+        for period in sma_periods:
+            sma = ta.sma(df["close"], length=period)
+            key = f"sma_{period}"
+            ind[key] = sma.rename(key) if isinstance(sma, pd.Series) else _nan_series(key)
+        # Keep backward compatibility
+        if 50 in sma_periods:
+            ind["sma_short"] = ind["sma_50"]
+        if 200 in sma_periods:
+            ind["sma_long"] = ind["sma_200"]
     except Exception:
+        for period in params["SMA"].get("periods", [50, 200]):
+            ind[f"sma_{period}"] = _nan_series(f"sma_{period}")
         ind["sma_short"] = _nan_series("sma_short")
-    try:
-        sma_l = ta.sma(df["close"], length=params["SMA"]["long"])
-        ind["sma_long"] = sma_l.rename("sma_long") if isinstance(sma_l, pd.Series) else _nan_series("sma_long")
-    except Exception:
         ind["sma_long"] = _nan_series("sma_long")
+    # EMA - Multiple periods
     try:
-        ema_s = ta.ema(df["close"], length=params["EMA"]["short"])
-        ind["ema_short"] = ema_s.rename("ema_short") if isinstance(ema_s, pd.Series) else _nan_series("ema_short")
+        ema_periods = params["EMA"].get("periods", [20, 50])
+        for period in ema_periods:
+            ema = ta.ema(df["close"], length=period)
+            key = f"ema_{period}"
+            ind[key] = ema.rename(key) if isinstance(ema, pd.Series) else _nan_series(key)
+        # Keep backward compatibility
+        if 20 in ema_periods:
+            ind["ema_short"] = ind["ema_20"]
+        elif 9 in ema_periods:
+            ind["ema_short"] = ind["ema_9"]
+        if 50 in ema_periods:
+            ind["ema_long"] = ind["ema_50"]
+        elif 55 in ema_periods:
+            ind["ema_long"] = ind["ema_55"]
     except Exception:
+        for period in params["EMA"].get("periods", [20, 50]):
+            ind[f"ema_{period}"] = _nan_series(f"ema_{period}")
         ind["ema_short"] = _nan_series("ema_short")
-    try:
-        ema_l = ta.ema(df["close"], length=params["EMA"]["long"])
-        ind["ema_long"] = ema_l.rename("ema_long") if isinstance(ema_l, pd.Series) else _nan_series("ema_long")
-    except Exception:
         ind["ema_long"] = _nan_series("ema_long")
 
     # Bollinger Bands
@@ -130,77 +155,128 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
 
     results: Dict[str, IndicatorResult] = {}
 
+    # Helper function to safely convert to float and check for NaN
+    def safe_float(val):
+        try:
+            f_val = float(val)
+            return f_val if not np.isnan(f_val) else None
+        except (ValueError, TypeError):
+            return None
+
     # RSI
-    rsi_val = float(ind["rsi"].iloc[-1])
-    rsi_dir: Direction = "buy" if rsi_val < params["RSI"]["oversold"] else (
-        "sell" if rsi_val > params["RSI"]["overbought"] else "none"
-    )
+    rsi_val = safe_float(ind["rsi"].iloc[-1])
+    if rsi_val is not None:
+        rsi_dir: Direction = "buy" if rsi_val < params["RSI"]["oversold"] else (
+            "sell" if rsi_val > params["RSI"]["overbought"] else "none"
+        )
+    else:
+        rsi_dir = "none"
+        rsi_val = np.nan
     results["RSI"] = IndicatorResult(rsi_dir, {"rsi": rsi_val}, 0)
 
     # MACD cross
-    macd_val = float(ind["macd"].iloc[-1])
-    macd_sig = float(ind["macd_signal"].iloc[-1])
-    macd_prev = float(ind["macd"].iloc[-2])
-    macd_sig_prev = float(ind["macd_signal"].iloc[-2])
+    macd_val = safe_float(ind["macd"].iloc[-1])
+    macd_sig = safe_float(ind["macd_signal"].iloc[-1])
+    macd_prev = safe_float(ind["macd"].iloc[-2])
+    macd_sig_prev = safe_float(ind["macd_signal"].iloc[-2])
     macd_dir: Direction = "none"
-    if _cross_over(macd_prev, macd_sig_prev, macd_val, macd_sig):
-        macd_dir = "buy"
-    elif _cross_under(macd_prev, macd_sig_prev, macd_val, macd_sig):
-        macd_dir = "sell"
-    results["MACD"] = IndicatorResult(macd_dir, {"macd": macd_val, "signal": macd_sig}, 0)
+    
+    if all(v is not None for v in [macd_val, macd_sig, macd_prev, macd_sig_prev]):
+        if _cross_over(macd_prev, macd_sig_prev, macd_val, macd_sig):
+            macd_dir = "buy"
+        elif _cross_under(macd_prev, macd_sig_prev, macd_val, macd_sig):
+            macd_dir = "sell"
+    
+    # Use original values for output (including NaN if present)
+    macd_val_out = float(ind["macd"].iloc[-1]) if macd_val is not None else np.nan
+    macd_sig_out = float(ind["macd_signal"].iloc[-1]) if macd_sig is not None else np.nan
+    results["MACD"] = IndicatorResult(macd_dir, {"macd": macd_val_out, "signal": macd_sig_out}, 0)
 
     # SMA cross
-    sma_s = float(ind["sma_short"].iloc[-1])
-    sma_l = float(ind["sma_long"].iloc[-1])
-    sma_s_prev = float(ind["sma_short"].iloc[-2])
-    sma_l_prev = float(ind["sma_long"].iloc[-2])
+    sma_s = safe_float(ind["sma_short"].iloc[-1])
+    sma_l = safe_float(ind["sma_long"].iloc[-1])
+    sma_s_prev = safe_float(ind["sma_short"].iloc[-2])
+    sma_l_prev = safe_float(ind["sma_long"].iloc[-2])
     sma_dir: Direction = "none"
-    if _cross_over(sma_s_prev, sma_l_prev, sma_s, sma_l):
-        sma_dir = "buy"
-    elif _cross_under(sma_s_prev, sma_l_prev, sma_s, sma_l):
-        sma_dir = "sell"
-    results["SMA"] = IndicatorResult(sma_dir, {"sma50": sma_s, "sma200": sma_l}, 0)
+    
+    if all(v is not None for v in [sma_s, sma_l, sma_s_prev, sma_l_prev]):
+        if _cross_over(sma_s_prev, sma_l_prev, sma_s, sma_l):
+            sma_dir = "buy"
+        elif _cross_under(sma_s_prev, sma_l_prev, sma_s, sma_l):
+            sma_dir = "sell"
+    
+    # Use original values for output (including NaN if present)
+    sma_s_out = float(ind["sma_short"].iloc[-1]) if sma_s is not None else np.nan
+    sma_l_out = float(ind["sma_long"].iloc[-1]) if sma_l is not None else np.nan
+    results["SMA"] = IndicatorResult(sma_dir, {"sma50": sma_s_out, "sma200": sma_l_out}, 0)
 
     # EMA cross
-    ema_s = float(ind["ema_short"].iloc[-1])
-    ema_l = float(ind["ema_long"].iloc[-1])
-    ema_s_prev = float(ind["ema_short"].iloc[-2])
-    ema_l_prev = float(ind["ema_long"].iloc[-2])
+    ema_s = safe_float(ind["ema_short"].iloc[-1])
+    ema_l = safe_float(ind["ema_long"].iloc[-1])
+    ema_s_prev = safe_float(ind["ema_short"].iloc[-2])
+    ema_l_prev = safe_float(ind["ema_long"].iloc[-2])
     ema_dir: Direction = "none"
-    if _cross_over(ema_s_prev, ema_l_prev, ema_s, ema_l):
-        ema_dir = "buy"
-    elif _cross_under(ema_s_prev, ema_l_prev, ema_s, ema_l):
-        ema_dir = "sell"
-    results["EMA"] = IndicatorResult(ema_dir, {"ema20": ema_s, "ema50": ema_l}, 0)
+    
+    if all(v is not None for v in [ema_s, ema_l, ema_s_prev, ema_l_prev]):
+        if _cross_over(ema_s_prev, ema_l_prev, ema_s, ema_l):
+            ema_dir = "buy"
+        elif _cross_under(ema_s_prev, ema_l_prev, ema_s, ema_l):
+            ema_dir = "sell"
+    
+    # Use original values for output (including NaN if present)
+    ema_s_out = float(ind["ema_short"].iloc[-1]) if ema_s is not None else np.nan
+    ema_l_out = float(ind["ema_long"].iloc[-1]) if ema_l is not None else np.nan
+    results["EMA"] = IndicatorResult(ema_dir, {"ema20": ema_s_out, "ema50": ema_l_out}, 0)
 
     # Bollinger + RSI condition
-    bb_low = float(ind["bb_low"].iloc[-1])
-    bb_high = float(ind["bb_high"].iloc[-1])
-    close = float(last["close"])
+    bb_low = safe_float(ind["bb_low"].iloc[-1])
+    bb_high = safe_float(ind["bb_high"].iloc[-1])
+    close = safe_float(last["close"])
     bb_dir: Direction = "none"
-    if close <= bb_low and rsi_val < params["RSI"]["oversold"]:
-        bb_dir = "buy"
-    elif close >= bb_high and rsi_val > params["RSI"]["overbought"]:
-        bb_dir = "sell"
-    results["BBANDS"] = IndicatorResult(bb_dir, {"bb_low": bb_low, "bb_high": bb_high, "close": close}, 0)
+    
+    if all(v is not None for v in [bb_low, bb_high, close, rsi_val]):
+        if close <= bb_low and rsi_val < params["RSI"]["oversold"]:
+            bb_dir = "buy"
+        elif close >= bb_high and rsi_val > params["RSI"]["overbought"]:
+            bb_dir = "sell"
+    
+    # Use original values for output (including NaN if present)
+    bb_low_out = float(ind["bb_low"].iloc[-1]) if bb_low is not None else np.nan
+    bb_high_out = float(ind["bb_high"].iloc[-1]) if bb_high is not None else np.nan
+    close_out = float(last["close"]) if close is not None else np.nan
+    results["BBANDS"] = IndicatorResult(bb_dir, {"bb_low": bb_low_out, "bb_high": bb_high_out, "close": close_out}, 0)
 
     # Stochastic cross
-    k = float(ind["stoch_k"].iloc[-1])
-    d = float(ind["stoch_d"].iloc[-1])
-    k_prev = float(ind["stoch_k"].iloc[-2])
-    d_prev = float(ind["stoch_d"].iloc[-2])
+    k = safe_float(ind["stoch_k"].iloc[-1])
+    d = safe_float(ind["stoch_d"].iloc[-1])
+    k_prev = safe_float(ind["stoch_k"].iloc[-2])
+    d_prev = safe_float(ind["stoch_d"].iloc[-2])
     st_dir: Direction = "none"
-    if _cross_over(k_prev, d_prev, k, d) and k < params["STOCH"]["oversold"]:
-        st_dir = "buy"
-    elif _cross_under(k_prev, d_prev, k, d) and k > params["STOCH"]["overbought"]:
-        st_dir = "sell"
-    results["STOCH"] = IndicatorResult(st_dir, {"k": k, "d": d}, 0)
+    
+    if all(v is not None for v in [k, d, k_prev, d_prev]):
+        if _cross_over(k_prev, d_prev, k, d) and k < params["STOCH"]["oversold"]:
+            st_dir = "buy"
+        elif _cross_under(k_prev, d_prev, k, d) and k > params["STOCH"]["overbought"]:
+            st_dir = "sell"
+    
+    # Use original values for output (including NaN if present)
+    k_out = float(ind["stoch_k"].iloc[-1]) if k is not None else np.nan
+    d_out = float(ind["stoch_d"].iloc[-1]) if d is not None else np.nan
+    results["STOCH"] = IndicatorResult(st_dir, {"k": k_out, "d": d_out}, 0)
 
     # ATR filter
-    atr = float(ind["atr"].iloc[-1])
-    atr_ratio = atr / close if close else 0.0
-    atr_ok = atr_ratio >= params["ATR"]["min_ratio"]
-    results["ATR"] = IndicatorResult("buy" if atr_ok else "none", {"atr": atr, "atr_ratio": atr_ratio}, 0)
+    atr = safe_float(ind["atr"].iloc[-1])
+    atr_dir: Direction = "none"
+    atr_ratio = 0.0
+    
+    if atr is not None and close is not None and close > 0:
+        atr_ratio = atr / close
+        atr_ok = atr_ratio >= params["ATR"]["min_ratio"]
+        atr_dir = "buy" if atr_ok else "none"
+    
+    # Use original values for output (including NaN if present)
+    atr_out = float(ind["atr"].iloc[-1]) if atr is not None else np.nan
+    results["ATR"] = IndicatorResult(atr_dir, {"atr": atr_out, "atr_ratio": atr_ratio}, 0)
 
     return results
 

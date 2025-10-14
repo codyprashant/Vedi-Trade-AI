@@ -270,21 +270,32 @@ async def poll_loop():
                 # Try fast_info first (lightweight)
                 try:
                     fi = getattr(ticker, "fast_info", None)
+                    print(f"WebSocket Debug - {symbol}: fast_info available: {fi is not None}")
                     if fi:
+                        print(f"WebSocket Debug - {symbol}: fast_info keys: {list(fi.keys()) if hasattr(fi, 'keys') else 'not dict-like'}")
+                        
                         # Use lastPrice as bid value
                         lastPrice_raw = fi.get("lastPrice", None)
                         bid = float(lastPrice_raw) if lastPrice_raw is not None else None
+                        print(f"WebSocket Debug - {symbol}: lastPrice_raw={lastPrice_raw}, bid={bid}")
                         
                         # Extract additional fields
                         previousClose_raw = fi.get("previousClose", None)
                         previous_close = float(previousClose_raw) if previousClose_raw is not None else None
+                        print(f"WebSocket Debug - {symbol}: previousClose_raw={previousClose_raw}, previous_close={previous_close}")
                         
                         market_state = fi.get("marketState", None)
+                        print(f"WebSocket Debug - {symbol}: market_state={market_state}")
                         
                         regularMarketPrice_raw = fi.get("regularMarketPrice", None)
                         regular_market_price = float(regularMarketPrice_raw) if regularMarketPrice_raw is not None else None
+                        print(f"WebSocket Debug - {symbol}: regularMarketPrice_raw={regularMarketPrice_raw}, regular_market_price={regular_market_price}")
+                    else:
+                        print(f"WebSocket Debug - {symbol}: fast_info is None or not available")
                 except Exception as e:
                     print(f"Error getting fast_info for {symbol}: {e}")
+                    import traceback
+                    traceback.print_exc()
 
                 # Fallback to latest 1m candle close
                 if bid is None:
@@ -307,27 +318,44 @@ async def poll_loop():
                 evaluation_data = None
                 try:
                     timeframe = "15m"  # Default timeframe for indicators
-                    count = 200  # Default count for indicators calculation
+                    count = 300  # Increased to 300 to ensure enough data for SMA 200 + buffer
+                    
+                    print(f"WebSocket Debug - {symbol}: Starting indicator computation with timeframe={timeframe}, count={count}")
                     
                     # Fetch recent history and compute indicators
                     df = fetch_history_df(symbol, timeframe, max(100, count))
+                    print(f"WebSocket Debug - {symbol}: Fetched df: {df is not None}, len={len(df) if df is not None else 0}")
+                    
                     if df is not None and len(df) >= 3:
+                        print(f"WebSocket Debug - {symbol}: Computing indicators with INDICATOR_PARAMS keys: {list(INDICATOR_PARAMS.keys())}")
                         ind = compute_indicators(df, INDICATOR_PARAMS)
+                        print(f"WebSocket Debug - {symbol}: Computed indicators keys: {list(ind.keys())}")
+                        
                         res = evaluate_signals(df, ind, INDICATOR_PARAMS)
+                        print(f"WebSocket Debug - {symbol}: Evaluated signals keys: {list(res.keys())}")
                         
                         # Extract last values for each indicator series
                         last_vals: dict[str, Any] = {}
                         for k, series in ind.items():
                             try:
-                                last_vals[k] = float(series.iloc[-1])
-                            except Exception:
+                                last_val = float(series.iloc[-1])
+                                last_vals[k] = last_val
+                                print(f"WebSocket Debug - {symbol}: {k} = {last_val}")
+                            except Exception as ex:
                                 last_vals[k] = None
+                                print(f"WebSocket Debug - {symbol}: {k} = None (error: {ex})")
                         
                         directions = {name: r.direction for name, r in res.items()}
+                        print(f"WebSocket Debug - {symbol}: Directions: {directions}")
+                        
                         indicators_data = last_vals
                         evaluation_data = directions
+                    else:
+                        print(f"WebSocket Debug - {symbol}: Insufficient data for indicators (df={df is not None}, len={len(df) if df is not None else 0})")
                 except Exception as e:
                     print(f"Error computing indicators for {symbol}: {e}")
+                    import traceback
+                    traceback.print_exc()
 
                 payload = {
                     "symbol": symbol,
