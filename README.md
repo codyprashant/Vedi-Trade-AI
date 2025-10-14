@@ -45,14 +45,36 @@ pip install -r requirements.txt
 Base URL: `http://localhost:8001`
 
 ## Core Endpoints
+
+### System & Data
 - `GET /health` — server status and signal engine status.
 - `GET /history?symbol=SPX&timeframe=4h&count=60` — historical candles.
 - `WS /ws/prices?symbol=XAUUSD` — subscribe to live quotes.
+
+### Signals & Analysis
 - `GET /signals/recent?limit=20&min_strength=50` — recent signals from Postgres.
+- `GET /signals/latest?symbol=XAUUSD` — latest signal for specific symbol.
+- `POST /api/signals/compute?symbols=XAUUSD` — manually trigger signal computation.
+
+### Indicators
 - `GET /indicators/latest?symbols=XAUUSD,SPX` — latest indicator snapshots per symbol.
+- `GET /indicators/live?symbol=XAUUSD&timeframe=15m` — live technical indicators.
+
+### Strategy Configuration
 - `GET /api/config/strategies` — list all trading strategies.
+- `GET /api/config/strategies/{id}` — get strategy details.
+- `PATCH /api/config/strategies/{id}/indicator/{name}` — update indicator parameters.
 - `PATCH /api/config/strategies/{id}/weights` — update strategy indicator weights.
+- `PATCH /api/config/strategies/{id}/schedule` — update run frequency.
+- `PATCH /api/config/strategies/{id}/threshold` — update signal threshold.
 - `POST /api/config/strategies/{id}/activate` — activate a trading strategy.
+
+### Backtesting
+- `POST /api/backtest/manual/generate` — generate historical signals.
+- `GET /api/backtest/manual/runs` — list backtesting runs.
+- `GET /api/backtest/manual/signals/{run_id}` — get signals for specific run.
+
+### Documentation
 - `GET /openapi.json` — live OpenAPI spec.
 - `GET /docs` — Swagger UI.
 
