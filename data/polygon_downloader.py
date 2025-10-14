@@ -57,7 +57,7 @@ def get_s3_client():
     session = boto3.Session(
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
-        region_name=region,
+        # region_name=region,
     )
     s3 = session.client(
         "s3",

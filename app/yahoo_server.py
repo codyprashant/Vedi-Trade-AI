@@ -848,3 +848,26 @@ async def stop_signal_engine():
             await asyncio.wait_for(signal_task, timeout=2)
         except Exception:
             pass
+
+
+@app.post("/api/signals/compute")
+async def signals_compute(symbols: str | None = None):
+    """Manually trigger a one-off signal computation for all or specified symbols.
+
+    Query param `symbols` can be a comma-separated list; defaults to strategy-configured symbols.
+    Returns a per-symbol summary of indicator validity, directions, strengths, and DB insert status.
+    """
+    try:
+        # Ensure engine instance exists
+        global signal_engine_instance
+        if signal_engine_instance is None:
+            signal_engine_instance = SignalEngine(fetch_history_df)
+
+        sym_list = None
+        if symbols:
+            sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+
+        results = await signal_engine_instance.compute_once(sym_list)
+        return {"count": len(results), "results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Manual compute failed: {e}")

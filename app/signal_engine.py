@@ -344,3 +344,229 @@ class SignalEngine:
 
     def stop(self):
         self.running = False
+
+    async def compute_once(self, symbols_override: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Run a single compute iteration for all (or provided) symbols and return a summary."""
+        results: List[Dict[str, Any]] = []
+        try:
+            # Load active strategy config from DB
+            strategy = get_active_strategy_config()
+            indicator_params = strategy.get("indicator_params", {})
+            weights = strategy.get("weights", {})
+            primary_tf = strategy.get("primary_timeframe", DEFAULT_TIMEFRAME)
+            confirmation_tf = strategy.get("confirmation_timeframe", "1h")
+            trend_tf = strategy.get("trend_timeframe", "4h")
+            signal_threshold = max(50.0, float(strategy.get("signal_threshold", SIGNAL_THRESHOLD)))
+
+            # Iterate over configured or overridden symbols
+            symbols: List[str] = symbols_override or strategy.get("symbols", DEFAULT_SYMBOLS)
+            for sym in symbols:
+                # Track attempts
+                self.attempt_counts_by_symbol[sym] = int(self.attempt_counts_by_symbol.get(sym, 0)) + 1
+                # Fetch M15/H1/H4 concurrently for each symbol
+                try:
+                    m15_df, h1_df, h4_df = await asyncio.gather(
+                        asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
+                        asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
+                        asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
+                    )
+                except Exception as fetch_err:
+                    results.append({
+                        "symbol": sym,
+                        "status": f"fetch_error: {fetch_err}",
+                    })
+                    continue
+
+                # Basic validation
+                if any(df is None or len(df) < 50 for df in (m15_df, h1_df, h4_df)):
+                    results.append({
+                        "symbol": sym,
+                        "status": "insufficient_data",
+                    })
+                    continue
+
+                # Compute primary indicators (M15)
+                ind = compute_indicators(m15_df, indicator_params)
+                res = evaluate_signals(m15_df, ind, indicator_params)
+                strat = compute_strategy_strength(res, weights)
+                best = best_signal(strat)
+                ts = pd.to_datetime(m15_df.iloc[-1]["time"]).isoformat()
+
+                # Compute indicator validity and direction distribution
+                try:
+                    total_inds = len(res)
+                    valid_inds = 0
+                    buy_cnt = 0
+                    sell_cnt = 0
+                    none_cnt = 0
+                    for name, r in res.items():
+                        vals = list(r.value.values())
+                        is_valid = all(
+                            (v is not None) and (not math.isnan(float(v)))
+                            for v in vals
+                        )
+                        if is_valid:
+                            valid_inds += 1
+                        if r.direction == "buy":
+                            buy_cnt += 1
+                        elif r.direction == "sell":
+                            sell_cnt += 1
+                        else:
+                            none_cnt += 1
+                    valid_pct = round(100.0 * valid_inds / max(1, total_inds), 1)
+                except Exception:
+                    total_inds, valid_inds, buy_cnt, sell_cnt, none_cnt, valid_pct = 0, 0, 0, 0, 0, 0.0
+
+                # Persist indicator snapshot opportunistically (do not enforce 10-minute spacing here)
+                try:
+                    insert_indicator_snapshot({
+                        "timestamp": ts,
+                        "symbol": sym,
+                        "timeframe": primary_tf,
+                        "indicators": {k: v.value for k, v in res.items()},
+                        "evaluation": {k: v.direction for k, v in res.items()},
+                        "strategy": best.get("strategy") if best else None,
+                    })
+                    snapshot_status = "ok"
+                except Exception as snap_err:
+                    snapshot_status = f"error: {snap_err}"
+
+                if not best or best["direction"] not in ("buy", "sell"):
+                    # No actionable signal for this symbol — summarize and continue
+                    freq_attempts = int(self.attempt_counts_by_symbol.get(sym, 0))
+                    freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
+                    freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
+                    base_strength = (best["strength"] if best and "strength" in best else None)
+                    results.append({
+                        "symbol": sym,
+                        "timeframe": primary_tf,
+                        "indicator_valid": f"{valid_inds}/{total_inds}",
+                        "indicator_valid_pct": valid_pct,
+                        "dirs": {"buy": buy_cnt, "sell": sell_cnt, "none": none_cnt},
+                        "base_strength": base_strength,
+                        "had_signal": False,
+                        "insert_status": "skipped",
+                        "snapshot_status": snapshot_status,
+                        "signal_frequency": {
+                            "signals": freq_signals,
+                            "attempts": freq_attempts,
+                            "percent": round(freq_pct, 1),
+                        },
+                    })
+                    continue
+
+                # Cache and compute H1 trend (per symbol)
+                h1_ts = h1_df.iloc[-1]["time"]
+                cache_h1 = self.h1_cache_by_symbol.get(sym)
+                if cache_h1 is None or str(cache_h1.get("ts")) != str(h1_ts):
+                    h1_dir = ema_trend_direction(h1_df, short_len=50, long_len=200)
+                    h1_atr_last, h1_atr_mean50 = atr_last_and_mean(
+                        h1_df,
+                        length=indicator_params.get("ATR", {}).get("length", 14),
+                        mean_window=50,
+                        params=indicator_params,
+                    )
+                    self.h1_cache_by_symbol[sym] = {
+                        "ts": h1_ts,
+                        "dir": h1_dir,
+                        "atr_last": h1_atr_last,
+                        "atr_mean50": h1_atr_mean50,
+                    }
+                else:
+                    h1_dir = cache_h1["dir"]
+
+                # Compute H4 trend (per symbol)
+                h4_ts = h4_df.iloc[-1]["time"]
+                cache_h4 = self.h4_cache_by_symbol.get(sym)
+                if cache_h4 is None or str(cache_h4.get("ts")) != str(h4_ts):
+                    h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
+                    self.h4_cache_by_symbol[sym] = {"ts": h4_ts, "dir": h4_dir}
+                else:
+                    h4_dir = cache_h4["dir"]
+
+                # Validate alignment and compute final strength
+                m15_side = best["direction"]
+                h1_is_bull = h1_dir == "Bullish"
+                aligns_h1 = (m15_side == "buy" and h1_is_bull) or (m15_side == "sell" and not h1_is_bull)
+                alignment_boost = 10.0 if aligns_h1 else 0.0
+                volatility_state = "Normal"  # Simplified for manual compute summary
+                entry_price = float(m15_df.iloc[-1]["close"]) if not math.isnan(float(m15_df.iloc[-1]["close"])) else None
+                stop_loss_price = None
+                take_profit_price = None
+                rr = None
+
+                # Save only when final strength >= threshold (>=50%)
+                base_strength_val = best["strength"]
+                final_strength = min(100.0, base_strength_val + alignment_boost)
+                had_signal = False
+                insert_status = "skipped"
+                if final_strength >= signal_threshold:
+                    record: Dict[str, Any] = {
+                        "timestamp": ts,
+                        "symbol": sym,
+                        "timeframe": primary_tf,
+                        "side": m15_side,
+                        "strength": base_strength_val,
+                        "strategy": best["strategy"],
+                        "indicators": {k: v.value for k, v in res.items()},
+                        "contributions": best["contributions"],
+                        "indicator_contributions": {
+                            "SMA_EMA": (
+                                weights.get("SMA_EMA", 0)
+                                if (res["SMA"].direction == m15_side and res["EMA"].direction == m15_side)
+                                else 0
+                            ),
+                            "MACD": (weights.get("MACD", 0) if res["MACD"].direction == m15_side else 0),
+                            "ATR_STABILITY": (weights.get("ATR_STABILITY", 0)),
+                            "PRICE_ACTION": (weights.get("PRICE_ACTION", 0)),
+                        },
+                        "signal_type": m15_side.upper(),
+                        "primary_timeframe": primary_tf,
+                        "confirmation_timeframe": confirmation_tf,
+                        "trend_timeframe": trend_tf,
+                        "h1_trend_direction": h1_dir,
+                        "h4_trend_direction": h4_dir,
+                        "alignment_boost": alignment_boost,
+                        "final_signal_strength": final_strength,
+                        # Trade plan fields
+                        "entry_price": entry_price,
+                        "stop_loss_price": stop_loss_price,
+                        "take_profit_price": take_profit_price,
+                        "risk_reward_ratio": rr,
+                        "volatility_state": volatility_state,
+                        # Validation
+                        "is_valid": True,
+                    }
+                    try:
+                        insert_signal(record)
+                        # Track signal frequency
+                        self.signal_counts_by_symbol[sym] = int(self.signal_counts_by_symbol.get(sym, 0)) + 1
+                        insert_status = "ok"
+                        had_signal = True
+                    except Exception as e:
+                        insert_status = f"error: {e}"
+
+                # Summarize
+                freq_attempts = int(self.attempt_counts_by_symbol.get(sym, 0))
+                freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
+                freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
+                results.append({
+                    "symbol": sym,
+                    "timeframe": primary_tf,
+                    "indicator_valid": f"{valid_inds}/{total_inds}",
+                    "indicator_valid_pct": valid_pct,
+                    "dirs": {"buy": buy_cnt, "sell": sell_cnt, "none": none_cnt},
+                    "base_strength": base_strength_val,
+                    "final_strength": final_strength,
+                    "had_signal": had_signal,
+                    "insert_status": insert_status,
+                    "snapshot_status": snapshot_status,
+                    "signal_frequency": {
+                        "signals": freq_signals,
+                        "attempts": freq_attempts,
+                        "percent": round(freq_pct, 1),
+                    },
+                })
+        except Exception as e:
+            results.append({"status": f"compute_once_error: {e}"})
+        return results
