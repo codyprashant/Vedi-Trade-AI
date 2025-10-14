@@ -48,6 +48,15 @@ async def test_websocket_extended():
                                 print(f"⏰ Time since last price update: {time_diff:.1f} seconds")
                             last_price_time = asyncio.get_event_loop().time()
                             print(f"💰 XAUUSD Bid Price: ${data['bid']:.2f}")
+                            
+                            # Display additional fields if available
+                            if data.get("previousClose") is not None:
+                                print(f"📊 Previous Close: ${data['previousClose']:.2f}")
+                            if data.get("marketState"):
+                                print(f"🏪 Market State: {data['marketState']}")
+                            if data.get("regularMarketPrice") is not None:
+                                print(f"📈 Regular Market Price: ${data['regularMarketPrice']:.2f}")
+                                
                         elif data.get("type") == "heartbeat":
                             print("💓 Heartbeat received")
                             

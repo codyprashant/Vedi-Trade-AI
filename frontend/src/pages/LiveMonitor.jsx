@@ -17,6 +17,9 @@ export default function LiveMonitor() {
   const [bid, setBid] = useState(0); // New state for bid price
   const [ask, setAsk] = useState(0); // New state for ask price
   const [spread, setSpread] = useState(0); // New state for spread
+  const [previousClose, setPreviousClose] = useState(null); // New state for previous close price
+  const [marketState, setMarketState] = useState(null); // New state for market state
+  const [regularMarketPrice, setRegularMarketPrice] = useState(null); // New state for regular market price
   const [wsConnected, setWsConnected] = useState(false); // New state for WebSocket connection status
   const [lastUpdate, setLastUpdate] = useState(null); // New state for last update timestamp
   const [priceIssue, setPriceIssue] = useState(false); // Show UI message when no price received
@@ -100,6 +103,12 @@ export default function LiveMonitor() {
             setBid(newBid);
             setAsk(null); // No ask price in new format
             setSpread(0); // No spread calculation
+            
+            // Simulate new fields
+            setPreviousClose(2348.50); // Mock previous close
+            setMarketState("REGULAR"); // Mock market state
+            setRegularMarketPrice(mockPrice + (Math.random() * 0.5 - 0.25)); // Mock regular market price with slight variation
+            
             setLastUpdate(new Date().toISOString()); // Set last update time
             lastTickAtRef.current = Date.now();
             setPriceIssue(false);
@@ -157,6 +166,12 @@ export default function LiveMonitor() {
               setBid(newBid);
               setAsk(null); // No ask price available
               setSpread(0); // No spread calculation possible
+              
+              // Handle new fields
+              setPreviousClose(data.previousClose ? parseFloat(data.previousClose) : null);
+              setMarketState(data.marketState || null);
+              setRegularMarketPrice(data.regularMarketPrice ? parseFloat(data.regularMarketPrice) : null);
+              
               setLastUpdate(data.time || new Date().toISOString()); // Use timestamp from data or current time
               lastTickAtRef.current = Date.now();
               setPriceIssue(false);
@@ -210,6 +225,12 @@ export default function LiveMonitor() {
             setBid(parseFloat(mockPrice.toFixed(2))); // Use mock price as bid
             setAsk(null); // No ask price in new format
             setSpread(0); // No spread calculation
+            
+            // Simulate new fields
+            setPreviousClose(2348.50); // Mock previous close
+            setMarketState("REGULAR"); // Mock market state
+            setRegularMarketPrice(mockPrice + (Math.random() * 0.5 - 0.25)); // Mock regular market price with slight variation
+            
             setLastUpdate(new Date().toISOString());
             lastTickAtRef.current = Date.now();
             setPriceIssue(false);
@@ -438,6 +459,39 @@ export default function LiveMonitor() {
                   </div>
                 </div>
               )}
+
+              {/* Additional Market Data */}
+              <div className="grid grid-cols-1 gap-2 mb-4">
+                {previousClose && (
+                  <div 
+                    className="p-2 rounded-lg text-center"
+                    style={{ background: 'rgba(156, 163, 175, 0.1)', border: '1px solid rgba(156, 163, 175, 0.3)' }}
+                  >
+                    <div className="text-xs text-gray-400/70 mb-1">Previous Close</div>
+                    <div className="text-sm font-semibold text-gray-300">${previousClose.toFixed(2)}</div>
+                  </div>
+                )}
+                
+                {regularMarketPrice && (
+                  <div 
+                    className="p-2 rounded-lg text-center"
+                    style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)' }}
+                  >
+                    <div className="text-xs text-green-400/70 mb-1">Regular Market Price</div>
+                    <div className="text-sm font-semibold text-green-400">${regularMarketPrice.toFixed(2)}</div>
+                  </div>
+                )}
+                
+                {marketState && (
+                  <div 
+                    className="p-2 rounded-lg text-center"
+                    style={{ background: 'rgba(168, 85, 247, 0.1)', border: '1px solid rgba(168, 85, 247, 0.3)' }}
+                  >
+                    <div className="text-xs text-purple-400/70 mb-1">Market State</div>
+                    <div className="text-sm font-semibold text-purple-400">{marketState}</div>
+                  </div>
+                )}
+              </div>
               
               <div className="flex items-center justify-center gap-3 text-sm text-white/60">
                 <div className="flex items-center gap-2">

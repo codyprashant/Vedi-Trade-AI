@@ -262,6 +262,9 @@ async def poll_loop():
                 ticker = yf.Ticker(y_symbol)
 
                 bid = None
+                previous_close = None
+                market_state = None
+                regular_market_price = None
                 ts_iso = datetime.now(timezone.utc).isoformat()
 
                 # Try fast_info first (lightweight)
@@ -271,6 +274,15 @@ async def poll_loop():
                         # Use lastPrice as bid value
                         lastPrice_raw = fi.get("lastPrice", None)
                         bid = float(lastPrice_raw) if lastPrice_raw is not None else None
+                        
+                        # Extract additional fields
+                        previousClose_raw = fi.get("previousClose", None)
+                        previous_close = float(previousClose_raw) if previousClose_raw is not None else None
+                        
+                        market_state = fi.get("marketState", None)
+                        
+                        regularMarketPrice_raw = fi.get("regularMarketPrice", None)
+                        regular_market_price = float(regularMarketPrice_raw) if regularMarketPrice_raw is not None else None
                 except Exception as e:
                     print(f"Error getting fast_info for {symbol}: {e}")
 
@@ -294,6 +306,9 @@ async def poll_loop():
                     "symbol": symbol,
                     "time": ts_iso,
                     "bid": bid,
+                    "previousClose": previous_close,
+                    "marketState": market_state,
+                    "regularMarketPrice": regular_market_price,
                 }
 
                 dead: Set[WebSocket] = set()

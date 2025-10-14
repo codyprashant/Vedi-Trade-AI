@@ -17,9 +17,18 @@ Allowed: `XAUUSD`, `USDCAD`, `USDJPY`, `GBPUSD`, `AUDUSD`, `AUS200`, `UK100`, `D
 
 - Endpoint: `GET ws://<host>/ws/prices?symbol=XAUUSD`
 - Messages:
-  - `{"symbol":"XAUUSD","time":"<iso>","bid":<number>}`
+  - `{"symbol":"XAUUSD","time":"<iso>","bid":<number>,"previousClose":<number>,"marketState":"<string>","regularMarketPrice":<number>}`
   - `{"type":"heartbeat","ts":"<iso>"}` every ~30s
   - On error (disallowed symbol): `{"type":"error","error":"symbol_not_allowed","allowed":[...]} `
+
+### WebSocket Response Fields
+
+- `symbol`: The canonical symbol (e.g., "XAUUSD")
+- `time`: ISO timestamp of the data
+- `bid`: Current bid price (from Yahoo Finance lastPrice)
+- `previousClose`: Previous day's closing price (may be null)
+- `marketState`: Current market state (e.g., "REGULAR", "CLOSED", "PRE", "POST", may be null)
+- `regularMarketPrice`: Regular market price (may be null)
 
 Example (browser):
 
@@ -28,7 +37,8 @@ const ws = new WebSocket("ws://localhost:8000/ws/prices?symbol=XAUUSD");
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
   if (msg.symbol && msg.bid !== undefined) {
-    // update UI: msg.symbol, msg.bid, msg.time
+    // update UI: msg.symbol, msg.bid, msg.time, msg.previousClose, msg.marketState, msg.regularMarketPrice
+    console.log(`${msg.symbol}: Bid=${msg.bid}, PrevClose=${msg.previousClose}, Market=${msg.marketState}`);
   }
 };
 ws.onclose = () => console.log("price stream closed");
@@ -306,6 +316,55 @@ Response:
   "status": "ok"
 }
 ```
+
+## Yahoo Finance fast_info Object Reference
+
+The WebSocket price data is sourced from Yahoo Finance's `fast_info` object. Below are the available keys and their descriptions:
+
+### Core Price Fields
+- `lastPrice`: The most recent trading price (used as `bid` in our WebSocket response)
+- `regularMarketPrice`: The regular market price during trading hours
+- `previousClose`: Previous day's closing price
+- `ask`: Ask price (often null for many symbols)
+- `bid`: Bid price (often null for many symbols, different from our WebSocket `bid`)
+
+### Market Information
+- `marketState`: Current market state
+  - `"REGULAR"`: Regular trading hours
+  - `"CLOSED"`: Market is closed
+  - `"PRE"`: Pre-market trading
+  - `"POST"`: After-hours trading
+- `currency`: The currency of the instrument (e.g., "USD")
+- `exchange`: The exchange where the instrument is traded
+- `quoteType`: Type of quote (e.g., "EQUITY", "CURRENCY", "FUTURE")
+
+### Technical Analysis Fields
+- `fiftyDayAverage`: 50-day moving average
+- `twoHundredDayAverage`: 200-day moving average
+- `yearHigh`: 52-week high price
+- `yearLow`: 52-week low price
+
+### Volume and Trading
+- `regularMarketVolume`: Volume during regular trading hours
+- `averageVolume`: Average trading volume
+- `averageVolume10days`: 10-day average volume
+
+### Market Cap and Valuation (for stocks)
+- `marketCap`: Market capitalization
+- `enterpriseValue`: Enterprise value
+- `priceToBook`: Price-to-book ratio
+- `forwardPE`: Forward price-to-earnings ratio
+- `trailingPE`: Trailing price-to-earnings ratio
+
+### Dividend Information (for dividend-paying stocks)
+- `dividendYield`: Annual dividend yield
+- `dividendRate`: Annual dividend rate
+- `exDividendDate`: Ex-dividend date
+
+### Notes
+- Many fields may be `null` or unavailable depending on the symbol type and market conditions
+- Our WebSocket implementation currently uses `lastPrice`, `previousClose`, `marketState`, and `regularMarketPrice`
+- The `bid` field in our WebSocket response comes from `lastPrice`, not the Yahoo Finance `bid` field (which is often null)
 
 ## Notes
 

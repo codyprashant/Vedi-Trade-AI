@@ -25,6 +25,9 @@ async def quick_test():
             print(f'Symbol: {data.get("symbol", "N/A")}')
             print(f'Timestamp: {data.get("time", "N/A")}')
             print(f'Bid Price: {data.get("bid", "N/A")}')
+            print(f'Previous Close: {data.get("previousClose", "N/A")}')
+            print(f'Market State: {data.get("marketState", "N/A")}')
+            print(f'Regular Market Price: {data.get("regularMarketPrice", "N/A")}')
             
     except Exception as e:
         print(f'❌ Error: {e}')
