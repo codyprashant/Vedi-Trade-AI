@@ -51,6 +51,8 @@ from .config import (
     PRIMARY_TIMEFRAME,
     CONFIRMATION_TIMEFRAME,
     TREND_TIMEFRAME,
+    DEBUG_WEBSOCKET,
+    DEBUG_SIGNALS,
 )
 
 
@@ -270,28 +272,35 @@ async def poll_loop():
                 # Try fast_info first (lightweight)
                 try:
                     fi = getattr(ticker, "fast_info", None)
-                    print(f"WebSocket Debug - {symbol}: fast_info available: {fi is not None}")
+                    if DEBUG_WEBSOCKET:
+                        print(f"WebSocket Debug - {symbol}: fast_info available: {fi is not None}")
                     if fi:
-                        print(f"WebSocket Debug - {symbol}: fast_info keys: {list(fi.keys()) if hasattr(fi, 'keys') else 'not dict-like'}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: fast_info keys: {list(fi.keys()) if hasattr(fi, 'keys') else 'not dict-like'}")
                         
                         # Use lastPrice as bid value
                         lastPrice_raw = fi.get("lastPrice", None)
                         bid = float(lastPrice_raw) if lastPrice_raw is not None else None
-                        print(f"WebSocket Debug - {symbol}: lastPrice_raw={lastPrice_raw}, bid={bid}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: lastPrice_raw={lastPrice_raw}, bid={bid}")
                         
                         # Extract additional fields
                         previousClose_raw = fi.get("previousClose", None)
                         previous_close = float(previousClose_raw) if previousClose_raw is not None else None
-                        print(f"WebSocket Debug - {symbol}: previousClose_raw={previousClose_raw}, previous_close={previous_close}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: previousClose_raw={previousClose_raw}, previous_close={previous_close}")
                         
                         market_state = fi.get("marketState", None)
-                        print(f"WebSocket Debug - {symbol}: market_state={market_state}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: market_state={market_state}")
                         
                         regularMarketPrice_raw = fi.get("regularMarketPrice", None)
                         regular_market_price = float(regularMarketPrice_raw) if regularMarketPrice_raw is not None else None
-                        print(f"WebSocket Debug - {symbol}: regularMarketPrice_raw={regularMarketPrice_raw}, regular_market_price={regular_market_price}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: regularMarketPrice_raw={regularMarketPrice_raw}, regular_market_price={regular_market_price}")
                     else:
-                        print(f"WebSocket Debug - {symbol}: fast_info is None or not available")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: fast_info is None or not available")
                 except Exception as e:
                     print(f"Error getting fast_info for {symbol}: {e}")
                     import traceback
@@ -320,19 +329,24 @@ async def poll_loop():
                     timeframe = "15m"  # Default timeframe for indicators
                     count = 300  # Increased to 300 to ensure enough data for SMA 200 + buffer
                     
-                    print(f"WebSocket Debug - {symbol}: Starting indicator computation with timeframe={timeframe}, count={count}")
+                    if DEBUG_WEBSOCKET:
+                        print(f"WebSocket Debug - {symbol}: Starting indicator computation with timeframe={timeframe}, count={count}")
                     
                     # Fetch recent history and compute indicators
                     df = fetch_history_df(symbol, timeframe, max(100, count))
-                    print(f"WebSocket Debug - {symbol}: Fetched df: {df is not None}, len={len(df) if df is not None else 0}")
+                    if DEBUG_WEBSOCKET:
+                        print(f"WebSocket Debug - {symbol}: Fetched df: {df is not None}, len={len(df) if df is not None else 0}")
                     
                     if df is not None and len(df) >= 3:
-                        print(f"WebSocket Debug - {symbol}: Computing indicators with INDICATOR_PARAMS keys: {list(INDICATOR_PARAMS.keys())}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: Computing indicators with INDICATOR_PARAMS keys: {list(INDICATOR_PARAMS.keys())}")
                         ind = compute_indicators(df, INDICATOR_PARAMS)
-                        print(f"WebSocket Debug - {symbol}: Computed indicators keys: {list(ind.keys())}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: Computed indicators keys: {list(ind.keys())}")
                         
                         res = evaluate_signals(df, ind, INDICATOR_PARAMS)
-                        print(f"WebSocket Debug - {symbol}: Evaluated signals keys: {list(res.keys())}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: Evaluated signals keys: {list(res.keys())}")
                         
                         # Extract last values for each indicator series (limit to 2 decimal places)
                         last_vals: dict[str, Any] = {}
@@ -341,10 +355,12 @@ async def poll_loop():
                                 last_val = float(series.iloc[-1])
                                 # Limit to 2 decimal places
                                 last_vals[k] = round(last_val, 2)
-                                print(f"WebSocket Debug - {symbol}: {k} = {last_vals[k]}")
+                                if DEBUG_WEBSOCKET:
+                                    print(f"WebSocket Debug - {symbol}: {k} = {last_vals[k]}")
                             except Exception as ex:
                                 last_vals[k] = None
-                                print(f"WebSocket Debug - {symbol}: {k} = None (error: {ex})")
+                                if DEBUG_WEBSOCKET:
+                                    print(f"WebSocket Debug - {symbol}: {k} = None (error: {ex})")
                         
                         # Convert 'none' to 'neutral' in evaluations
                         directions = {}
@@ -353,12 +369,14 @@ async def poll_loop():
                             if direction == "none":
                                 direction = "neutral"
                             directions[name] = direction
-                        print(f"WebSocket Debug - {symbol}: Directions: {directions}")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: Directions: {directions}")
                         
                         indicators_data = last_vals
                         evaluation_data = directions
                     else:
-                        print(f"WebSocket Debug - {symbol}: Insufficient data for indicators (df={df is not None}, len={len(df) if df is not None else 0})")
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: Insufficient data for indicators (df={df is not None}, len={len(df) if df is not None else 0})")
                 except Exception as e:
                     print(f"Error computing indicators for {symbol}: {e}")
                     import traceback
@@ -371,7 +389,8 @@ async def poll_loop():
                     latest_signal = fetch_latest_signal_by_symbol(symbol)
                     signal_history = fetch_recent_signals_by_symbol(symbol, 10)
                 except Exception as e:
-                    print(f"WebSocket Debug - {symbol}: Error fetching signals: {e}")
+                    if DEBUG_WEBSOCKET:
+                        print(f"WebSocket Debug - {symbol}: Error fetching signals: {e}")
 
                 payload = {
                     "symbol": symbol,

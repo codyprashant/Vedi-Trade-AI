@@ -370,7 +370,7 @@ class SignalEngine:
                             f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {final_strength} | "
                             f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
                             f"Decision: {m15_side} | Alignment H1:{h1_dir} H4:{h4_dir} boost {alignment_boost:+.0f}% | "
-                            f"Volatility {volatility_state} RR {rr:.2f} | Persist: {insert_status}"
+                            f"Volatility {volatility_state} RR {rr:.2f} | Final Efficiency: {final_strength:.1f}% | Persist: {insert_status}"
                         )
 
 
@@ -648,7 +648,7 @@ class SignalEngine:
                     f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
                     f"Decision: {'buy' if had_signal and final_strength>=signal_threshold else 'no_action'} | "
                     f"Alignment H1:{h1_dir} H4:{h4_dir} boost {alignment_boost:+.0f}% | Volatility {volatility_state} RR {rr:.2f} | "
-                    f"Persist: {insert_status}"
+                    f"Final Efficiency: {final_strength:.1f}% | Persist: {insert_status}"
                 )
         except Exception as e:
             results.append({"status": f"compute_once_error: {e}"})

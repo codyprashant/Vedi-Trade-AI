@@ -57,5 +57,9 @@ ALIGNMENT_BOOST_H4 = 5
 
 SIGNAL_THRESHOLD = 60  # percent
 
+# Logging Configuration
+DEBUG_WEBSOCKET = False  # Set to True to enable detailed WebSocket debug logs
+DEBUG_SIGNALS = True     # Set to True to enable detailed signal processing logs
+
 # Supabase
 SUPABASE_TABLE = "signals"
