@@ -294,11 +294,24 @@ def best_signal(strategies: Dict[str, Dict]) -> Optional[Dict]:
 
 
 # --- Multi-timeframe helpers ---
+def _safe_ema_series(close: pd.Series, length: int) -> pd.Series:
+    """Return a pd.Series for EMA(length); if pandas_ta returns None or errors, return NaN series."""
+    try:
+        s = ta.ema(close, length=length)
+        if isinstance(s, pd.Series):
+            return s
+        # Fallback: same index, NaNs
+        return pd.Series([np.nan] * len(close), index=close.index)
+    except Exception:
+        return pd.Series([np.nan] * len(close), index=close.index)
 def ema_trend_direction(df: pd.DataFrame, short_len: int = 50, long_len: int = 200) -> str:
     """Return 'Bullish' if EMA(short_len) > EMA(long_len), else 'Bearish'."""
-    ema_s = ta.ema(df["close"], length=short_len).iloc[-1]
-    ema_l = ta.ema(df["close"], length=long_len).iloc[-1]
-    return "Bullish" if float(ema_s) > float(ema_l) else "Bearish"
+    ema_s_series = _safe_ema_series(df["close"], short_len)
+    ema_l_series = _safe_ema_series(df["close"], long_len)
+    # Use last values; NaNs will default to Bearish due to comparison semantics
+    ema_s_last = float(ema_s_series.iloc[-1]) if len(ema_s_series) else float("nan")
+    ema_l_last = float(ema_l_series.iloc[-1]) if len(ema_l_series) else float("nan")
+    return "Bullish" if (ema_s_last > ema_l_last) else "Bearish"
 
 
 def atr_last(df: pd.DataFrame, length: int = None, params: Dict[str, Dict] | None = None) -> float:
@@ -341,8 +354,8 @@ def price_action_direction(df: pd.DataFrame, lookback: int = 5, params: Dict[str
     lower_wick_last = min(open_last, close_last) - low_last
     upper_wick_last = high_last - max(open_last, close_last)
 
-    ema20_series = ta.ema(df["close"], length=p["EMA"]["short"])  # EMA short
-    ema20_last = float(ema20_series.iloc[-1])
+    ema20_series = _safe_ema_series(df["close"], length=p["EMA"]["short"])  # EMA short
+    ema20_last = float(ema20_series.iloc[-1]) if len(ema20_series) else float("nan")
     ema20_prev3 = float(ema20_series.iloc[-3]) if len(ema20_series) >= 3 else ema20_last
 
     buy_score = 0

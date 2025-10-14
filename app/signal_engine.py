@@ -72,15 +72,44 @@ class SignalEngine:
                 for sym in symbols:
                     # Track attempts
                     self.attempt_counts_by_symbol[sym] = int(self.attempt_counts_by_symbol.get(sym, 0)) + 1
-                    # Fetch M15/H1/H4 concurrently for each symbol
-                    try:
-                        m15_df, h1_df, h4_df = await asyncio.gather(
-                            asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
-                            asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
-                            asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
+                    # Fetch M15/H1/H4 concurrently for each symbol, capturing per-timeframe statuses
+                    fetch_tasks = [
+                        asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
+                        asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
+                        asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
+                    ]
+                    m15_res, h1_res, h4_res = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+                    # Build fetch status report
+                    def _df_state(res, tf):
+                        if isinstance(res, Exception):
+                            return {"tf": tf, "status": f"error:{res}"}
+                        if res is None:
+                            return {"tf": tf, "status": "none", "len": 0}
+                        try:
+                            last_ts = str(pd.to_datetime(res.iloc[-1]["time"]))
+                        except Exception:
+                            last_ts = "unknown"
+                        return {"tf": tf, "status": "ok", "len": len(res), "last": last_ts}
+
+                    fetch_report = [
+                        _df_state(m15_res, primary_tf),
+                        _df_state(h1_res, confirmation_tf),
+                        _df_state(h4_res, trend_tf),
+                    ]
+
+                    # Convert results to DataFrames or None
+                    m15_df = m15_res if isinstance(m15_res, pd.DataFrame) else None
+                    h1_df = h1_res if isinstance(h1_res, pd.DataFrame) else None
+                    h4_df = h4_res if isinstance(h4_res, pd.DataFrame) else None
+
+                    # Basic validation
+                    if any(df is None or len(df) < 50 for df in (m15_df, h1_df, h4_df)):
+                        print(
+                            f"Signal logs - Signal Flow | {sym} {primary_tf} | gain N/A | "
+                            f"Fetch {fetch_report} | Result: insufficient_data"
                         )
-                    except Exception as fetch_err:
-                        print(f"Signal logs - Fetch failed for {sym}: {fetch_err}")
+                        print(f"Signal logs - Insufficient data for {sym}; skipping.")
                         continue
 
                     # Basic validation
@@ -147,6 +176,12 @@ class SignalEngine:
                             f"Signal logs - Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
                             f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, none:{none_cnt}}} | base_strength {base_strength} | "
                             f"signal False | insert skipped | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
+                        )
+                        # Consolidated flow log with reason
+                        print(
+                            f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {base_strength} | "
+                            f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
+                            f"Decision: no_action | Reason: best_direction_missing"
                         )
                         continue
 
@@ -326,6 +361,13 @@ class SignalEngine:
                             f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, none:{none_cnt}}} | base_strength {base_strength} | "
                             f"signal True | insert {insert_status} | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
                         )
+                        # Consolidated flow log when signal generated
+                        print(
+                            f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {final_strength} | "
+                            f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
+                            f"Decision: {m15_side} | Alignment H1:{h1_dir} H4:{h4_dir} boost {alignment_boost:+.0f}% | "
+                            f"Volatility {volatility_state} RR {rr:.2f} | Persist: {insert_status}"
+                        )
 
 
                 # Yield control briefly between symbols
@@ -363,25 +405,45 @@ class SignalEngine:
             for sym in symbols:
                 # Track attempts
                 self.attempt_counts_by_symbol[sym] = int(self.attempt_counts_by_symbol.get(sym, 0)) + 1
-                # Fetch M15/H1/H4 concurrently for each symbol
-                try:
-                    m15_df, h1_df, h4_df = await asyncio.gather(
-                        asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
-                        asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
-                        asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
-                    )
-                except Exception as fetch_err:
-                    results.append({
-                        "symbol": sym,
-                        "status": f"fetch_error: {fetch_err}",
-                    })
-                    continue
+                # Fetch M15/H1/H4 concurrently for each symbol, capturing per-timeframe statuses
+                fetch_tasks = [
+                    asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
+                    asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
+                    asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
+                ]
+                m15_res, h1_res, h4_res = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+                def _df_state(res, tf):
+                    if isinstance(res, Exception):
+                        return {"tf": tf, "status": f"error:{res}"}
+                    if res is None:
+                        return {"tf": tf, "status": "none", "len": 0}
+                    try:
+                        last_ts = str(pd.to_datetime(res.iloc[-1]["time"]))
+                    except Exception:
+                        last_ts = "unknown"
+                    return {"tf": tf, "status": "ok", "len": len(res), "last": last_ts}
+
+                fetch_report = [
+                    _df_state(m15_res, primary_tf),
+                    _df_state(h1_res, confirmation_tf),
+                    _df_state(h4_res, trend_tf),
+                ]
+
+                m15_df = m15_res if isinstance(m15_res, pd.DataFrame) else None
+                h1_df = h1_res if isinstance(h1_res, pd.DataFrame) else None
+                h4_df = h4_res if isinstance(h4_res, pd.DataFrame) else None
 
                 # Basic validation
                 if any(df is None or len(df) < 50 for df in (m15_df, h1_df, h4_df)):
+                    print(
+                        f"Signal logs - Signal Flow | {sym} {primary_tf} | gain N/A | "
+                        f"Fetch {fetch_report} | Result: insufficient_data"
+                    )
                     results.append({
                         "symbol": sym,
                         "status": "insufficient_data",
+                        "fetch": fetch_report,
                     })
                     continue
 
@@ -437,6 +499,11 @@ class SignalEngine:
                     freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
                     freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
                     base_strength = (best["strength"] if best and "strength" in best else None)
+                    print(
+                        f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {base_strength} | "
+                        f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
+                        f"Decision: no_action | Reason: best_direction_missing | Persist: skipped"
+                    )
                     results.append({
                         "symbol": sym,
                         "timeframe": primary_tf,
@@ -452,6 +519,7 @@ class SignalEngine:
                             "attempts": freq_attempts,
                             "percent": round(freq_pct, 1),
                         },
+                        "fetch": fetch_report,
                     })
                     continue
 
@@ -566,7 +634,15 @@ class SignalEngine:
                         "attempts": freq_attempts,
                         "percent": round(freq_pct, 1),
                     },
+                    "fetch": fetch_report,
                 })
+                print(
+                    f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {final_strength} | "
+                    f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
+                    f"Decision: {'buy' if had_signal and final_strength>=signal_threshold else 'no_action'} | "
+                    f"Alignment H1:{h1_dir} H4:{h4_dir} boost {alignment_boost:+.0f}% | Volatility {volatility_state} RR {rr:.2f} | "
+                    f"Persist: {insert_status}"
+                )
         except Exception as e:
             results.append({"status": f"compute_once_error: {e}"})
         return results
