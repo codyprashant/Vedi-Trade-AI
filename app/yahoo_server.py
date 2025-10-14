@@ -35,6 +35,13 @@ from .db import (
     insert_backtesting_run,
     fetch_backtesting_runs,
     fetch_backtesting_signals_by_run,
+    get_strategies,
+    get_strategy_details,
+    update_indicator_params,
+    update_strategy_weights,
+    update_strategy_schedule,
+    update_strategy_threshold,
+    set_active_strategy,
 )
 from .config import (
     ALLOWED_SYMBOLS,
@@ -68,6 +75,7 @@ DEFAULT_CORS_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3001",
+    "https://vedi-trade-ai.base44.app"
 ]
 
 def _parse_cors_origins(raw: Optional[str]) -> list[str]:
@@ -485,6 +493,19 @@ def fetch_range_df_csv(symbol: str, timeframe: str, start_ts, end_ts) -> pd.Data
         raise RuntimeError("CSV has no rows within the requested range")
     return df
 
+
+# --- Strategy configuration models ---
+class UpdateIndicatorRequest(BaseModel):
+    params: Dict[str, Any]
+
+class UpdateWeightsRequest(BaseModel):
+    weights: Dict[str, Any]
+
+class UpdateScheduleRequest(BaseModel):
+    run_interval_seconds: int
+
+class UpdateThresholdRequest(BaseModel):
+    signal_threshold: float
 
 # --- Backtesting models ---
 class ManualBacktestRequest(BaseModel):
@@ -955,3 +976,79 @@ async def indicators_live(symbol: str, timeframe: str = "15m", count: int = 200)
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compute live indicators: {e}")
+
+
+# --- Strategy Configuration API Endpoints ---
+
+@app.get("/api/config/strategies")
+async def get_all_strategies():
+    """Get all strategies with their basic information."""
+    try:
+        strategies = get_strategies()
+        return {"strategies": strategies}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch strategies: {e}")
+
+
+@app.get("/api/config/strategies/{strategy_id}")
+async def get_strategy_by_id(strategy_id: int):
+    """Get detailed information about a specific strategy including indicators and weights."""
+    try:
+        strategy = get_strategy_details(strategy_id)
+        return strategy
+    except RuntimeError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch strategy: {e}")
+
+
+@app.patch("/api/config/strategies/{strategy_id}/indicator/{indicator_name}")
+async def update_strategy_indicator(strategy_id: int, indicator_name: str, req: UpdateIndicatorRequest):
+    """Update indicator parameters for a specific strategy."""
+    try:
+        update_indicator_params(strategy_id, indicator_name, req.params)
+        return {"message": f"Updated {indicator_name} parameters for strategy {strategy_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update indicator parameters: {e}")
+
+
+@app.patch("/api/config/strategies/{strategy_id}/weights")
+async def update_strategy_weights(strategy_id: int, req: UpdateWeightsRequest):
+    """Update weights for a specific strategy."""
+    try:
+        update_strategy_weights(strategy_id, req.weights)
+        return {"message": f"Updated weights for strategy {strategy_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update weights: {e}")
+
+
+@app.patch("/api/config/strategies/{strategy_id}/schedule")
+async def update_strategy_schedule(strategy_id: int, req: UpdateScheduleRequest):
+    """Update run interval schedule for a specific strategy."""
+    try:
+        update_strategy_schedule(strategy_id, req.run_interval_seconds)
+        return {"message": f"Updated schedule for strategy {strategy_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update schedule: {e}")
+
+
+@app.patch("/api/config/strategies/{strategy_id}/threshold")
+async def update_strategy_threshold(strategy_id: int, req: UpdateThresholdRequest):
+    """Update signal threshold for a specific strategy."""
+    try:
+        update_strategy_threshold(strategy_id, req.signal_threshold)
+        return {"message": f"Updated threshold for strategy {strategy_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update threshold: {e}")
+
+
+@app.post("/api/config/strategies/{strategy_id}/activate")
+async def activate_strategy(strategy_id: int):
+    """Activate a specific strategy (deactivates all others)."""
+    try:
+        set_active_strategy(strategy_id)
+        return {"message": f"Activated strategy {strategy_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to activate strategy: {e}")
