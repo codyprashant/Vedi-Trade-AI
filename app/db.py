@@ -641,6 +641,38 @@ def fetch_recent_signals(limit: int = 20) -> List[Dict[str, Any]]:
         _put_conn(conn)
 
 
+def fetch_recent_signals_by_symbol(symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """Return the most recent signals for a given symbol."""
+    conn = _get_conn()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "select * from public.signals where symbol = %s order by timestamp desc limit %s",
+                    (symbol, limit),
+                )
+                rows = cur.fetchall()
+                return [dict(row) for row in rows]
+    finally:
+        _put_conn(conn)
+
+
+def fetch_latest_signal_by_symbol(symbol: str) -> Optional[Dict[str, Any]]:
+    """Return the latest signal row for a given symbol, or None."""
+    conn = _get_conn()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "select * from public.signals where symbol = %s order by timestamp desc limit 1",
+                    (symbol,),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+    finally:
+        _put_conn(conn)
+
+
 def insert_backtesting_signals_batch(records: List[Dict[str, Any]]) -> None:
     """Batch insert backtesting signals for a manual run."""
     if not records:

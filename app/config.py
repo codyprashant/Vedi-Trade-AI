@@ -1,6 +1,8 @@
 DEFAULT_SYMBOL = "XAUUSD"
-DEFAULT_SYMBOLS = [
-    "GC=F",
+
+# Canonical allowed symbols (use these everywhere across app/backend/frontend)
+ALLOWED_SYMBOLS = [
+    "XAUUSD",
     "USDCAD",
     "USDJPY",
     "GBPUSD",
@@ -13,6 +15,9 @@ DEFAULT_SYMBOLS = [
     "GER40",
     "FRA40",
 ]
+
+# Backward-compatible alias for legacy imports
+DEFAULT_SYMBOLS = ALLOWED_SYMBOLS
 DEFAULT_TIMEFRAME = "15m"  # primary analysis timeframe for signals (M15)
 PRIMARY_TIMEFRAME = "M15"
 CONFIRMATION_TIMEFRAME = "H1"
@@ -43,6 +48,12 @@ WEIGHTS = {
     "ATR_STABILITY": 10,   # Normal volatility environment
     "PRICE_ACTION": 10,    # Recent 5-candle momentum pattern
 }
+
+# Alignment boost configuration (applies additively on top of base strength)
+# H1 boost is applied when M15 aligns with H1; H4 boost is applied when H4 agrees with H1
+# and M15 aligns with H1. No penalties are applied on misalignment.
+ALIGNMENT_BOOST_H1 = 10
+ALIGNMENT_BOOST_H4 = 5
 
 SIGNAL_THRESHOLD = 90  # percent
 

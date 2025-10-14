@@ -10,7 +10,7 @@ import math
 
 from .config import (
     DEFAULT_SYMBOL,
-    DEFAULT_SYMBOLS,
+    ALLOWED_SYMBOLS,
     DEFAULT_TIMEFRAME,
     DEFAULT_HISTORY_COUNT,
     SIGNAL_THRESHOLD,
@@ -19,6 +19,8 @@ from .config import (
     PRIMARY_TIMEFRAME,
     CONFIRMATION_TIMEFRAME,
     TREND_TIMEFRAME,
+    ALIGNMENT_BOOST_H1,
+    ALIGNMENT_BOOST_H4,
 )
 from .indicators import (
     compute_indicators,
@@ -68,7 +70,7 @@ class SignalEngine:
                 signal_threshold = max(50.0, float(strategy.get("signal_threshold", SIGNAL_THRESHOLD)))
 
                 # Iterate over configured symbols and evaluate
-                symbols: List[str] = strategy.get("symbols", DEFAULT_SYMBOLS)
+                symbols: List[str] = strategy.get("symbols", ALLOWED_SYMBOLS)
                 for sym in symbols:
                     # Track attempts
                     self.attempt_counts_by_symbol[sym] = int(self.attempt_counts_by_symbol.get(sym, 0)) + 1
@@ -279,8 +281,10 @@ class SignalEngine:
                     sl_pips = sl_distance / pip_value
                     tp_pips = tp_distance / pip_value
 
-                    # Alignment boost: only H4 vs H1 per spec (+10 / -10)
-                    alignment_boost = 10.0 if h4_dir == h1_dir else -10.0
+                    # Unified alignment boost: additive H1 and H4 components, no penalties on misalignment
+                    h1_boost = float(ALIGNMENT_BOOST_H1) if aligns_h1 else 0.0
+                    h4_boost = float(ALIGNMENT_BOOST_H4) if (aligns_h1 and h4_dir == h1_dir) else 0.0
+                    alignment_boost = h1_boost + h4_boost
 
                     # Price action heuristic over last 5 candles
                     pa_dir = price_action_direction(m15_df, lookback=5, params=indicator_params)
@@ -401,7 +405,7 @@ class SignalEngine:
             signal_threshold = max(50.0, float(strategy.get("signal_threshold", SIGNAL_THRESHOLD)))
 
             # Iterate over configured or overridden symbols
-            symbols: List[str] = symbols_override or strategy.get("symbols", DEFAULT_SYMBOLS)
+            symbols: List[str] = symbols_override or strategy.get("symbols", ALLOWED_SYMBOLS)
             for sym in symbols:
                 # Track attempts
                 self.attempt_counts_by_symbol[sym] = int(self.attempt_counts_by_symbol.get(sym, 0)) + 1
@@ -556,7 +560,10 @@ class SignalEngine:
                 m15_side = best["direction"]
                 h1_is_bull = h1_dir == "Bullish"
                 aligns_h1 = (m15_side == "buy" and h1_is_bull) or (m15_side == "sell" and not h1_is_bull)
-                alignment_boost = 10.0 if aligns_h1 else 0.0
+                # Unified alignment boost: additive H1 and H4 components, no penalties on misalignment
+                h1_boost = float(ALIGNMENT_BOOST_H1) if aligns_h1 else 0.0
+                h4_boost = float(ALIGNMENT_BOOST_H4) if (aligns_h1 and h4_dir == h1_dir) else 0.0
+                alignment_boost = h1_boost + h4_boost
                 volatility_state = "Normal"  # Simplified for manual compute summary
                 entry_price = float(m15_df.iloc[-1]["close"]) if not math.isnan(float(m15_df.iloc[-1]["close"])) else None
                 stop_loss_price = None

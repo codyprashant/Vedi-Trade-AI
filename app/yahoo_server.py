@@ -27,6 +27,8 @@ from .db import (
     ensure_strategy_tables,
     create_default_gold_strategy_if_missing,
     fetch_recent_signals,
+    fetch_recent_signals_by_symbol,
+    fetch_latest_signal_by_symbol,
     ensure_indicator_snapshots_table,
     fetch_latest_indicator_snapshots,
     insert_backtesting_signals_batch,
@@ -35,7 +37,7 @@ from .db import (
     fetch_backtesting_signals_by_run,
 )
 from .config import (
-    DEFAULT_SYMBOLS,
+    ALLOWED_SYMBOLS,
     INDICATOR_PARAMS,
     WEIGHTS,
     SIGNAL_THRESHOLD,
@@ -127,23 +129,24 @@ def ensure_inactivity_watch():
         inactivity_task = asyncio.create_task(inactivity_watch())
 
 
-# --- Symbol resolution for Yahoo Finance ---
-YAHOO_SYMBOL_MAP = {
-    # Common mappings
-    # Prefer liquid Gold futures, as XAUUSD=X is often restricted
-    "XAUUSD": "GC=F",  # Gold futures
-    "XAUUSD=X": "GC=F",
-    "XAU=X": "GC=F",
-    "XAU": "GC=F",
-    "GOLD": "GC=F",
-    "BTCUSD": "BTC-USD",
-    "ETHUSD": "ETH-USD",
-    # FX majors
+# --- Symbol normalization and resolution (canonical -> Yahoo ticker) ---
+# Canonicalization: map common aliases to one canonical symbol used everywhere
+CANONICAL_SYMBOL_MAP = {
+    # Gold aliases
+    "XAUUSD=X": "XAUUSD",
+    "XAU=X": "XAUUSD",
+    "XAU": "XAUUSD",
+    "GOLD": "XAUUSD",
+    "GC=F": "XAUUSD",
+}
+
+# Yahoo tickers for our canonical symbols
+YAHOO_SYMBOL_FOR_CANONICAL = {
+    "XAUUSD": "GC=F",
     "USDCAD": "USDCAD=X",
     "USDJPY": "USDJPY=X",
     "GBPUSD": "GBPUSD=X",
     "AUDUSD": "AUDUSD=X",
-    # Indices
     "AUS200": "^AXJO",
     "UK100": "^FTSE",
     "DJ30": "^DJI",
@@ -153,10 +156,15 @@ YAHOO_SYMBOL_MAP = {
     "FRA40": "^FCHI",
 }
 
+def canonical_symbol(symbol: str) -> str:
+    sym = symbol.upper().strip()
+    return CANONICAL_SYMBOL_MAP.get(sym, sym)
 
 def resolve_symbol(symbol: str) -> str:
-    sym = symbol.upper()
-    return YAHOO_SYMBOL_MAP.get(sym, symbol)
+    canon = canonical_symbol(symbol)
+    if canon not in ALLOWED_SYMBOLS:
+        raise HTTPException(status_code=400, detail=f"Symbol not allowed: {symbol}. Allowed: {', '.join(ALLOWED_SYMBOLS)}")
+    return YAHOO_SYMBOL_FOR_CANONICAL.get(canon, canon)
 
 
 # --- Timeframe parsing ---
@@ -320,7 +328,7 @@ async def history(symbol: str = "XAUUSD", timeframe: str = "15m", count: int = 5
     interval = parse_timeframe(timeframe)
     if not interval:
         raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
-
+    # Validate and normalize symbol
     y_symbol = resolve_symbol(symbol)
     ticker = yf.Ticker(y_symbol)
 
@@ -361,6 +369,7 @@ def fetch_history_df(symbol: str, timeframe: str, count: int) -> pd.DataFrame:
     interval = parse_timeframe(timeframe)
     if not interval:
         raise RuntimeError(f"Unsupported timeframe: {timeframe}")
+    # Validate and normalize symbol
     y_symbol = resolve_symbol(symbol)
     ticker = yf.Ticker(y_symbol)
     period = _approx_period_for_count(interval, count)
@@ -405,6 +414,7 @@ def fetch_range_df(symbol: str, timeframe: str, start_ts, end_ts) -> pd.DataFram
     interval = parse_timeframe(timeframe)
     if not interval:
         raise RuntimeError(f"Unsupported timeframe: {timeframe}")
+    # Validate and normalize symbol
     y_symbol = resolve_symbol(symbol)
     start_dt = pd.to_datetime(start_ts)
     end_dt = pd.to_datetime(end_ts)
@@ -747,7 +757,17 @@ async def backtest_signals(manual_run_id: str):
 @app.websocket("/ws/prices")
 async def ws_prices(websocket: WebSocket, symbol: str = "XAUUSD"):
     await websocket.accept()
+    # Validate and normalize symbol up-front; store canonical in subscriptions
+    canon = canonical_symbol(symbol)
+    if canon not in ALLOWED_SYMBOLS:
+        try:
+            await websocket.send_json({"type": "error", "error": "symbol_not_allowed", "allowed": ALLOWED_SYMBOLS})
+        except Exception:
+            pass
+        await websocket.close()
+        return
 
+    symbol = canon
     sockets = subscriptions.setdefault(symbol, set())
     sockets.add(websocket)
 
@@ -781,14 +801,37 @@ async def ws_prices(websocket: WebSocket, symbol: str = "XAUUSD"):
 
 
 @app.get("/signals/recent")
-async def recent_signals(limit: int = 20, min_strength: float | None = None):
+async def recent_signals(limit: int = 20, min_strength: float | None = None, symbol: str | None = None):
     try:
-        rows = fetch_recent_signals(limit)
+        if symbol:
+            canon = canonical_symbol(symbol)
+            if canon not in ALLOWED_SYMBOLS:
+                raise HTTPException(status_code=400, detail=f"symbol_not_allowed: {symbol}")
+            rows = fetch_recent_signals_by_symbol(canon, limit)
+        else:
+            rows = fetch_recent_signals(limit)
         if min_strength is not None:
             rows = [r for r in rows if float(r.get("final_signal_strength") or 0) >= float(min_strength)]
         return {"count": len(rows), "signals": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Postgres query failed: {e}")
+
+
+@app.get("/signals/latest")
+async def latest_signal(symbol: str):
+    """Return the most recent signal for a specific symbol, including all indicator values and contributions."""
+    try:
+        canon = canonical_symbol(symbol)
+        if canon not in ALLOWED_SYMBOLS:
+            raise HTTPException(status_code=400, detail=f"symbol_not_allowed: {symbol}")
+        row = fetch_latest_signal_by_symbol(canon)
+        if not row:
+            raise HTTPException(status_code=404, detail=f"No signal found for {canon}")
+        return {"symbol": canon, "signal": row}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch latest signal: {e}")
 
 
 @app.get("/indicators/latest")
@@ -801,7 +844,7 @@ async def indicators_latest(symbols: str | None = None):
         if symbols:
             sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
         else:
-            sym_list = DEFAULT_SYMBOLS
+            sym_list = ALLOWED_SYMBOLS
         rows = fetch_latest_indicator_snapshots(sym_list)
         return {"count": len(rows), "snapshots": rows}
     except Exception as e:
@@ -871,3 +914,44 @@ async def signals_compute(symbols: str | None = None):
         return {"count": len(results), "results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Manual compute failed: {e}")
+
+
+@app.get("/indicators/live")
+async def indicators_live(symbol: str, timeframe: str = "15m", count: int = 200):
+    """Compute live technical indicators for the latest candle set from Yahoo, respecting the latest price.
+
+    Returns last indicator values and evaluation directions for the most recent candle.
+    """
+    try:
+        interval = parse_timeframe(timeframe)
+        if not interval:
+            raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
+        canon = canonical_symbol(symbol)
+        if canon not in ALLOWED_SYMBOLS:
+            raise HTTPException(status_code=400, detail=f"symbol_not_allowed: {symbol}")
+        # Fetch recent history and compute indicators on it
+        df = fetch_history_df(canon, timeframe, max(100, count))
+        if df is None or len(df) < 3:
+            raise HTTPException(status_code=400, detail="Insufficient data to compute indicators")
+        ind = compute_indicators(df, INDICATOR_PARAMS)
+        res = evaluate_signals(df, ind, INDICATOR_PARAMS)
+        ts = pd.to_datetime(df.iloc[-1]["time"]).isoformat()
+        # Extract last values for each indicator series
+        last_vals: dict[str, Any] = {}
+        for k, series in ind.items():
+            try:
+                last_vals[k] = float(series.iloc[-1])
+            except Exception:
+                last_vals[k] = None
+        directions = {name: r.direction for name, r in res.items()}
+        return {
+            "symbol": canon,
+            "timeframe": timeframe,
+            "timestamp": ts,
+            "indicators": last_vals,
+            "evaluation": directions,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compute live indicators: {e}")

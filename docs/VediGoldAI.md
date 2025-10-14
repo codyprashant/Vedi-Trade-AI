@@ -8,7 +8,7 @@ The system exposes REST endpoints for health, historical data, signals, and back
 
 ## Key Features
 
-- Multi-timeframe signal generation on `M15`, validated against `H1` trend; `H4` trend boosts confidence.
+- Multi-timeframe signal generation on `M15`, validated against `H1` trend; additive `H1`/`H4` alignment boosts increase confidence.
 - Rich indicator suite: RSI, MACD, SMA/EMA, Bollinger Bands, Stochastic, ATR, and price action patterns.
 - Strategy engine combining trend and momentum contributions with configurable weights and thresholds.
 - Volatility-aware trade planning: entry, stop-loss, and take-profit distances adapt to ATR and volatility state.
@@ -25,7 +25,7 @@ The system exposes REST endpoints for health, historical data, signals, and back
   - Starts the `SignalEngine` loop at startup; stops it gracefully on shutdown.
 - Decision Engine: `app/signal_engine.py`
   - Periodically fetches `M15`, `H1`, `H4` data and computes indicators on `M15`.
-  - Evaluates strategy strength and validates M15 signals against H1 trend; applies H4 alignment boost.
+  - Evaluates strategy strength and validates M15 signals against H1 trend; applies additive alignment boosts (H1 and H4).
   - Classifies volatility via H1 ATR vs rolling mean; skips extreme volatility.
   - Calculates trade plan (entry/SL/TP) and persists high-confidence signals.
 - Indicators & Strategies: `app/indicators.py`
@@ -62,6 +62,9 @@ The system exposes REST endpoints for health, historical data, signals, and back
   - `MTF=10` (H1 alignment), `ATR_STABILITY=10` (Normal volatility), `PRICE_ACTION=10`
 - Thresholds
   - `SIGNAL_THRESHOLD = 90` (final strength required to persist a signal)
+ - Alignment boosts (configurable)
+  - `ALIGNMENT_BOOST_H1 = 10` (applied when M15 aligns with H1)
+  - `ALIGNMENT_BOOST_H4 = 5` (applied when H4 agrees with H1 and M15 aligns with H1)
 
 ## Indicators Library
 
@@ -85,24 +88,30 @@ The system exposes REST endpoints for health, historical data, signals, and back
   - Combined: majority across all (excluding ATR for direction); contributions from all, ATR acts as filter.
 - Best strategy (`best_signal`): selects the strategy with the highest computed strength.
 - Multi-timeframe validation:
-  - `H1` trend via EMA(50/200); M15 side must align with `H1` or the signal is skipped.
-  - `H4` trend alignment adds a boost: `+10` if H4 aligns with H1, else `-10`.
+  - `H1` trend via EMA(50/200); M15 side must align with `H1` or the signal is skipped (engine loop).
+  - Additive alignment boosts:
+    - `+ALIGNMENT_BOOST_H1` when `M15` aligns with `H1`.
+    - `+ALIGNMENT_BOOST_H4` when `H4` agrees with `H1` and `M15` aligns with `H1`.
+    - No penalties on misalignment; lack of alignment simply yields no boost.
 - Volatility classification (using H1 ATR vs mean50):
   - `Extreme` if ATR > 3× mean → skip.
   - `High` if ATR > 1.2× mean; `Low` if ATR < 0.8× mean; else `Normal`.
 - Confidence contributions (final strength basis):
-  - Sum of weights when indicator directions align with `m15_side` plus MTF/ATR_STABILITY/PRICE_ACTION.
-  - `final_strength = min(100, base_strength + alignment_boost)`; must be ≥ `SIGNAL_THRESHOLD`.
+  - Sum of weights when indicator directions align with `m15_side` plus `MTF`/`ATR_STABILITY`/`PRICE_ACTION`.
+  - Alignment boosts added on top: `final_strength = min(100, base_strength + H1_boost + H4_boost)`.
+  - Must be ≥ `SIGNAL_THRESHOLD` to persist.
 
 ## Signal Generation Flow
+
+![Signal Generation Flow](signal_flowchart.svg)
 
 1. Fetch `M15`, `H1`, `H4` history concurrently.
 2. Compute indicators on `M15`; evaluate per-indicator directions.
 3. Compute strategy strengths (`trend`, `momentum`, `combined`) and select the best.
-4. Validate M15 side against `H1` trend; skip if misaligned.
+4. Validate `M15` side against `H1` trend (engine run skips if misaligned; manual compute summarizes).
 5. Classify volatility using `H1` ATR vs mean; skip extreme volatility.
 6. Compute trade plan (entry/SL/TP) distances based on ATR and volatility state.
-7. Compute contributions and final strength (including `H4` alignment boost).
+7. Compute contributions (base) and additive alignment boosts (`+H1`, `+H4`).
 8. Persist the signal to Postgres if final strength ≥ threshold.
 
 ## Trade Plan Computation
