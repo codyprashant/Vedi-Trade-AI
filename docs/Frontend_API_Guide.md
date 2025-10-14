@@ -13,11 +13,11 @@ Use the following canonical symbols. Any alias is normalized to these; anything 
 
 Allowed: `XAUUSD`, `USDCAD`, `USDJPY`, `GBPUSD`, `AUDUSD`, `AUS200`, `UK100`, `DJ30`, `SPX`, `NAS100`, `GER40`, `FRA40`.
 
-## Live Prices (WebSocket)
+## Live Prices (WebSocket) - Enhanced 2025
 
 - Endpoint: `GET ws://<host>/ws/prices?symbol=XAUUSD`
 - Messages:
-  - `{"symbol":"XAUUSD","time":"<iso>","bid":<number>,"previousClose":<number>,"marketState":"<string>","regularMarketPrice":<number>,"indicators":{...},"evaluation":{...}}`
+  - Enhanced response with integrated signal data: `{"symbol":"XAUUSD","time":"<iso>","bid":<number>,"previousClose":<number>,"indicators":{...},"evaluation":{...},"latestSignal":{...},"signalHistory":[...]}`
   - `{"type":"heartbeat","ts":"<iso>"}` every ~30s
   - On error (disallowed symbol): `{"type":"error","error":"symbol_not_allowed","allowed":[...]} `
 
@@ -25,45 +25,70 @@ Allowed: `XAUUSD`, `USDCAD`, `USDJPY`, `GBPUSD`, `AUDUSD`, `AUS200`, `UK100`, `D
 
 - `symbol`: The canonical symbol (e.g., "XAUUSD")
 - `time`: ISO timestamp of the data
-- `bid`: Current bid price (from Yahoo Finance lastPrice)
+- `bid`: Current bid price (from Yahoo Finance lastPrice, 2 decimal precision)
 - `previousClose`: Previous day's closing price (may be null)
-- `marketState`: Current market state (e.g., "REGULAR", "CLOSED", "PRE", "POST", may be null)
-- `regularMarketPrice`: Regular market price (may be null)
-- `indicators`: Object containing live technical indicator values (15m timeframe, may be null)
-  - Contains indicator values like RSI, MACD, EMA, SMA, etc.
-  - Example: `{"rsi": 65.2, "macd": 1.23, "ema_20": 2350.45, ...}`
-- `evaluation`: Object containing indicator signal directions (may be null)
-  - Contains evaluation results for each indicator
-  - Example: `{"rsi": "sell", "macd": "buy", "ema_trend": "bullish", ...}`
+- `indicators`: Object containing 21 live technical indicator values (15m timeframe, 2 decimal precision)
+  - Contains indicator values like RSI (9/14), MACD, EMA, SMA, Bollinger Bands, Stochastic, ATR
+  - Example: `{"rsi_9": 52.38, "rsi_14": 53.63, "macd": 2.36, "sma_20": 4161.29, "ema_9": 4160.80, "bb_low": 4153.57, "stoch_k": 51.50, "atr": 7.66}`
+- `evaluation`: Object containing indicator signal evaluations (uses "neutral" instead of "none")
+  - Contains evaluation results for each indicator group
+  - Example: `{"RSI": "neutral", "MACD": "buy", "SMA": "sell", "EMA": "neutral", "BBANDS": "neutral", "STOCH": "neutral", "ATR": "neutral"}`
+- `latestSignal`: Object containing the most recent trading signal for the symbol (may be null)
+  - Complete signal specifications with entry/exit prices
+  - Example: `{"timestamp": "2025-01-01T12:34:56Z", "signal_type": "BUY", "final_signal_strength": 72.5, "entry_price": 2365.20, "stop_loss_price": 2357.00, "take_profit_price": 2380.00}`
+- `signalHistory`: Array containing the last 10 trading signals with full specifications
+  - Historical signal data for pattern analysis
+  - Each signal includes timestamp, type, strength, and price levels
 
 Example (browser):
 
 ```js
-const ws = new WebSocket("ws://localhost:8000/ws/prices?symbol=XAUUSD");
+const ws = new WebSocket("ws://localhost:8001/ws/prices?symbol=XAUUSD");
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
   if (msg.symbol && msg.bid !== undefined) {
-    // update UI: msg.symbol, msg.bid, msg.time, msg.previousClose, msg.marketState, msg.regularMarketPrice
-    console.log(`${msg.symbol}: Bid=${msg.bid}, PrevClose=${msg.previousClose}, Market=${msg.marketState}`);
+    // Update UI with enhanced data
+    console.log(`${msg.symbol}: Bid=${msg.bid}, PrevClose=${msg.previousClose}`);
     
-    // Handle indicators data
+    // Handle 21 technical indicators (all with 2 decimal precision)
     if (msg.indicators) {
-      console.log("Indicators:", msg.indicators);
-      // Example: access specific indicators
-      if (msg.indicators.rsi) console.log(`RSI: ${msg.indicators.rsi}`);
-      if (msg.indicators.macd) console.log(`MACD: ${msg.indicators.macd}`);
+      console.log("Technical Indicators:", msg.indicators);
+      // Access specific indicators
+      console.log(`RSI (9): ${msg.indicators.rsi_9}, RSI (14): ${msg.indicators.rsi_14}`);
+      console.log(`MACD: ${msg.indicators.macd}, Signal: ${msg.indicators.macd_signal}`);
+      console.log(`SMA (20): ${msg.indicators.sma_20}, EMA (9): ${msg.indicators.ema_9}`);
+      console.log(`Bollinger: Low=${msg.indicators.bb_low}, Mid=${msg.indicators.bb_mid}, High=${msg.indicators.bb_high}`);
+      console.log(`Stochastic: K=${msg.indicators.stoch_k}, D=${msg.indicators.stoch_d}`);
+      console.log(`ATR: ${msg.indicators.atr}`);
     }
     
-    // Handle evaluation data
+    // Handle evaluation data (now uses "neutral" instead of "none")
     if (msg.evaluation) {
-      console.log("Evaluation:", msg.evaluation);
-      // Example: access specific evaluations
-      if (msg.evaluation.rsi) console.log(`RSI Signal: ${msg.evaluation.rsi}`);
-      if (msg.evaluation.macd) console.log(`MACD Signal: ${msg.evaluation.macd}`);
+      console.log("Signal Evaluations:", msg.evaluation);
+      // All evaluations: "buy", "sell", or "neutral"
+      Object.entries(msg.evaluation).forEach(([indicator, signal]) => {
+        console.log(`${indicator}: ${signal}`);
+      });
+    }
+    
+    // Handle latest trading signal
+    if (msg.latestSignal) {
+      console.log("Latest Signal:", msg.latestSignal);
+      console.log(`Signal: ${msg.latestSignal.signal_type} at ${msg.latestSignal.entry_price}`);
+      console.log(`Stop Loss: ${msg.latestSignal.stop_loss_price}, Take Profit: ${msg.latestSignal.take_profit_price}`);
+      console.log(`Strength: ${msg.latestSignal.final_signal_strength}%`);
+    }
+    
+    // Handle signal history for pattern analysis
+    if (msg.signalHistory && msg.signalHistory.length > 0) {
+      console.log(`Signal History: ${msg.signalHistory.length} recent signals`);
+      msg.signalHistory.slice(0, 3).forEach((signal, index) => {
+        console.log(`${index + 1}. ${signal.signal_type} at ${signal.timestamp} (Strength: ${signal.final_signal_strength}%)`);
+      });
     }
   }
 };
-ws.onclose = () => console.log("price stream closed");
+ws.onclose = () => console.log("Enhanced price stream closed");
 ```
 
 ## Latest Signal (by symbol)

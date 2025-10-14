@@ -1,10 +1,18 @@
-# VediGold AI — Comprehensive Documentation
+# VediTrading AI — Comprehensive Documentation
 
 ## Overview
 
-VediGold AI is a sophisticated FastAPI-based trading analytics and signal generation engine designed for multi-asset trading with primary focus on `XAUUSD` (Gold). The system analyzes multi-timeframe price data, computes a comprehensive suite of technical indicators with multiple periods, and produces validated trade signals through advanced strategy algorithms. It provides real-time WebSocket streaming, manual backtesting capabilities, and a trade execution simulator for performance evaluation.
+VediTrading AI is a sophisticated FastAPI-based trading analytics and signal generation engine designed for multi-asset trading across Forex, Commodities, and Indices. The system analyzes multi-timeframe price data, computes a comprehensive suite of technical indicators with multiple periods, and produces validated trade signals through advanced strategy algorithms. It provides enhanced real-time WebSocket streaming with integrated signal data, manual backtesting capabilities, and a trade execution simulator for performance evaluation.
 
-The system exposes REST endpoints for health monitoring, historical data retrieval, signal management, and backtesting, plus a WebSocket feed for live tick streaming with detailed indicator data. All signals and backtesting artifacts are persisted in PostgreSQL (e.g., Supabase) for comprehensive analytics and historical tracking.
+The system exposes REST endpoints for health monitoring, historical data retrieval, signal management, strategy configuration, and backtesting, plus an enhanced WebSocket feed for live tick streaming with detailed indicator data, signal evaluations, and trading signals. All signals and backtesting artifacts are persisted in PostgreSQL for comprehensive analytics and historical tracking.
+
+### Recent Enhancements (2025)
+
+- **Enhanced WebSocket Streaming**: Real-time indicator evaluations with "neutral" instead of "none" for better UX
+- **Integrated Signal Data**: Latest signals and signal history directly in WebSocket response
+- **Precision Control**: All indicator values limited to 2 decimal places for consistency
+- **Streamlined Response**: Removed unnecessary market state fields for cleaner data
+- **Strategy Configuration**: Dynamic strategy management with real-time parameter updates
 
 ## Key Features
 
@@ -511,49 +519,84 @@ Decision: SKIP SIGNAL GENERATION
 Reason: Extreme volatility environment
 ```
 
-## WebSocket API Enhancement
+## Enhanced WebSocket API (2025 Update)
 
-### Real-Time Indicator Streaming
+### Real-Time Indicator Streaming with Signal Integration
 
-The WebSocket endpoint `/ws/prices` now provides comprehensive indicator data:
+The WebSocket endpoint `/ws/prices` now provides comprehensive indicator data with integrated signal information:
 
 ```json
 {
   "symbol": "XAUUSD",
-  "time": "2024-01-15T14:30:00Z",
-  "bid": 2350.45,
-  "previousClose": 2348.20,
-  "marketState": "REGULAR",
-  "regularMarketPrice": 2350.50,
+  "time": "2025-10-14T22:13:00.915806+00:00",
+  "bid": 4160.90,
+  "previousClose": 4175.30,
   "indicators": {
-    "rsi_9": 28.5,
-    "rsi_14": 31.2,
-    "rsi": 31.2,
-    "macd": 1.23,
-    "macd_signal": 0.98,
-    "macd_histogram": 0.25,
-    "sma_20": 2348.20,
-    "sma_50": 2345.80,
-    "sma_200": 2340.15,
-    "ema_9": 2349.10,
-    "ema_21": 2347.50,
-    "ema_55": 2344.25,
-    "bb_upper": 2365.50,
-    "bb_lower": 2335.50,
-    "stoch_k": 25.8,
-    "stoch_d": 22.4,
-    "atr": 7.85
+    "rsi_9": 52.38,
+    "rsi_14": 53.63,
+    "rsi": 53.63,
+    "macd": 2.36,
+    "macd_signal": -0.86,
+    "sma_20": 4161.29,
+    "sma_50": 4152.56,
+    "sma_200": 4113.44,
+    "sma_short": 4152.56,
+    "sma_long": 4113.44,
+    "ema_9": 4160.80,
+    "ema_21": 4159.25,
+    "ema_55": 4153.55,
+    "ema_short": 4160.80,
+    "ema_long": 4153.55,
+    "bb_low": 4153.57,
+    "bb_mid": 4161.29,
+    "bb_high": 4169.01,
+    "stoch_k": 51.50,
+    "stoch_d": 52.15,
+    "atr": 7.66
   },
   "evaluation": {
-    "RSI": "buy",
-    "MACD": "buy", 
-    "SMA": "buy",
-    "EMA": "buy",
-    "BBANDS": "buy",
-    "STOCH": "buy",
-    "ATR": "none"
-  }
+    "RSI": "neutral",
+    "MACD": "neutral", 
+    "SMA": "neutral",
+    "EMA": "neutral",
+    "BBANDS": "neutral",
+    "STOCH": "neutral",
+    "ATR": "neutral"
+  },
+  "latestSignal": {
+    "timestamp": "2025-01-01T12:34:56Z",
+    "symbol": "XAUUSD",
+    "signal_type": "BUY",
+    "final_signal_strength": 72.5,
+    "entry_price": 2365.20,
+    "stop_loss_price": 2357.00,
+    "take_profit_price": 2380.00,
+    "risk_reward_ratio": 1.5,
+    "volatility_state": "Normal"
+  },
+  "signalHistory": [
+    {
+      "timestamp": "2025-01-01T10:15:00Z",
+      "signal_type": "SELL",
+      "final_signal_strength": 68.3,
+      "entry_price": 2372.50,
+      "stop_loss_price": 2380.00,
+      "take_profit_price": 2360.00
+    }
+    // ... up to 10 recent signals
+  ]
 }
+```
+
+### Key WebSocket Enhancements
+
+1. **Precision Control**: All indicator values limited to 2 decimal places for consistency
+2. **Enhanced Evaluations**: "neutral" replaces "none" for better user experience  
+3. **Removed Fields**: `marketState` and `regularMarketPrice` removed (not available for futures)
+4. **Signal Integration**: `latestSignal` provides current trading signal with complete specifications
+5. **Signal History**: `signalHistory` contains last 10 signals for pattern analysis
+6. **21 Technical Indicators**: Comprehensive real-time technical analysis
+7. **Real-time Evaluations**: Live signal direction for each indicator group
 ```
 
 ## Advanced Strategy Configuration

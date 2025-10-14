@@ -334,18 +334,25 @@ async def poll_loop():
                         res = evaluate_signals(df, ind, INDICATOR_PARAMS)
                         print(f"WebSocket Debug - {symbol}: Evaluated signals keys: {list(res.keys())}")
                         
-                        # Extract last values for each indicator series
+                        # Extract last values for each indicator series (limit to 2 decimal places)
                         last_vals: dict[str, Any] = {}
                         for k, series in ind.items():
                             try:
                                 last_val = float(series.iloc[-1])
-                                last_vals[k] = last_val
-                                print(f"WebSocket Debug - {symbol}: {k} = {last_val}")
+                                # Limit to 2 decimal places
+                                last_vals[k] = round(last_val, 2)
+                                print(f"WebSocket Debug - {symbol}: {k} = {last_vals[k]}")
                             except Exception as ex:
                                 last_vals[k] = None
                                 print(f"WebSocket Debug - {symbol}: {k} = None (error: {ex})")
                         
-                        directions = {name: r.direction for name, r in res.items()}
+                        # Convert 'none' to 'neutral' in evaluations
+                        directions = {}
+                        for name, r in res.items():
+                            direction = r.direction
+                            if direction == "none":
+                                direction = "neutral"
+                            directions[name] = direction
                         print(f"WebSocket Debug - {symbol}: Directions: {directions}")
                         
                         indicators_data = last_vals
@@ -357,15 +364,24 @@ async def poll_loop():
                     import traceback
                     traceback.print_exc()
 
+                # Fetch latest signal and signal history for this symbol
+                latest_signal = None
+                signal_history = []
+                try:
+                    latest_signal = fetch_latest_signal_by_symbol(symbol)
+                    signal_history = fetch_recent_signals_by_symbol(symbol, 10)
+                except Exception as e:
+                    print(f"WebSocket Debug - {symbol}: Error fetching signals: {e}")
+
                 payload = {
                     "symbol": symbol,
                     "time": ts_iso,
                     "bid": bid,
                     "previousClose": previous_close,
-                    "marketState": market_state,
-                    "regularMarketPrice": regular_market_price,
                     "indicators": indicators_data,
                     "evaluation": evaluation_data,
+                    "latestSignal": latest_signal,
+                    "signalHistory": signal_history,
                 }
 
                 dead: Set[WebSocket] = set()

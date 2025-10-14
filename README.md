@@ -137,27 +137,89 @@ The `fast_info` object for XAUUSD provides 20 data fields:
 }
 ```
 
+## WebSocket Live Price Streaming
+
+### Current WebSocket Response Format
+
+Our WebSocket endpoint (`/ws/prices?symbol=XAUUSD`) now provides enhanced real-time data:
+
+```json
+{
+  "symbol": "XAUUSD",
+  "time": "2025-10-14T22:13:00.915806+00:00",
+  "bid": 4160.90,
+  "previousClose": 4175.30,
+  "indicators": {
+    "rsi_9": 52.38,
+    "rsi_14": 53.63,
+    "macd": 2.36,
+    "macd_signal": -0.86,
+    "sma_20": 4161.29,
+    "sma_50": 4152.56,
+    "sma_200": 4113.44,
+    "ema_9": 4160.80,
+    "ema_21": 4159.25,
+    "bb_low": 4153.57,
+    "bb_mid": 4161.29,
+    "bb_high": 4169.01,
+    "stoch_k": 51.50,
+    "stoch_d": 52.15,
+    "atr": 7.66
+  },
+  "evaluation": {
+    "RSI": "neutral",
+    "MACD": "neutral",
+    "SMA": "neutral",
+    "EMA": "neutral",
+    "BBANDS": "neutral",
+    "STOCH": "neutral",
+    "ATR": "neutral"
+  },
+  "latestSignal": {
+    "timestamp": "2025-01-01T12:34:56Z",
+    "signal_type": "BUY",
+    "final_signal_strength": 72.5,
+    "entry_price": 2365.20,
+    "stop_loss_price": 2357.00,
+    "take_profit_price": 2380.00
+  },
+  "signalHistory": [
+    // Array of last 10 signals with complete specifications
+  ]
+}
+```
+
 ### WebSocket Response Mapping
 
 Our WebSocket response maps the following fields from `fast_info`:
 
 | WebSocket Field | fast_info Field | Description |
 |----------------|-----------------|-------------|
-| `bid` | `lastPrice` | Current market price |
+| `bid` | `lastPrice` | Current market price (limited to 2 decimal places) |
 | `previousClose` | `previousClose` | Previous day's closing price |
-| `marketState` | ❌ **Not Available** | Market state (null for XAUUSD) |
-| `regularMarketPrice` | ❌ **Not Available** | Regular market price (null for XAUUSD) |
+| `indicators` | *Computed* | Live technical indicators (21 indicators, 2 decimal precision) |
+| `evaluation` | *Computed* | Indicator evaluations ("neutral" instead of "none") |
+| `latestSignal` | *Database* | Most recent trading signal for the symbol |
+| `signalHistory` | *Database* | Last 10 signals with full specifications |
+
+### Recent Improvements
+
+1. **Enhanced Evaluations**: Changed "none" to "neutral" for better user experience
+2. **Precision Control**: All indicator values limited to 2 decimal places
+3. **Streamlined Response**: Removed `marketState` and `regularMarketPrice` (not available for futures)
+4. **Signal Integration**: Added latest signal and signal history directly in WebSocket response
+5. **Complete Technical Analysis**: 21 technical indicators with real-time evaluations
 
 ### Important Notes
 
-1. **Missing Fields**: `marketState` and `regularMarketPrice` are **not provided** by Yahoo Finance for futures symbols like XAUUSD (GC=F). This is expected behavior, not an error.
+1. **Removed Fields**: `marketState` and `regularMarketPrice` have been removed as they are not provided by Yahoo Finance for futures symbols like XAUUSD (GC=F).
 
 2. **Asset Type Differences**: Different asset types (stocks, forex, indices, futures) may have different available fields in their `fast_info` response.
 
 3. **Data Types**: 
-   - Prices are returned as `float` values
+   - Prices are returned as `float` values with 2 decimal precision
    - Volumes are returned as `int` values  
-   - Some fields may be `null` depending on the asset type
+   - Evaluations use "neutral" instead of "none" for clarity
    - Strings are used for metadata (currency, exchange, timezone, etc.)
 
 4. **Symbol Resolution**: 
