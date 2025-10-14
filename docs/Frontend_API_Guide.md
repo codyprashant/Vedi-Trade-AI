@@ -17,7 +17,7 @@ Allowed: `XAUUSD`, `USDCAD`, `USDJPY`, `GBPUSD`, `AUDUSD`, `AUS200`, `UK100`, `D
 
 - Endpoint: `GET ws://<host>/ws/prices?symbol=XAUUSD`
 - Messages:
-  - `{"symbol":"XAUUSD","time":"<iso>","bid":<number>,"previousClose":<number>,"marketState":"<string>","regularMarketPrice":<number>}`
+  - `{"symbol":"XAUUSD","time":"<iso>","bid":<number>,"previousClose":<number>,"marketState":"<string>","regularMarketPrice":<number>,"indicators":{...},"evaluation":{...}}`
   - `{"type":"heartbeat","ts":"<iso>"}` every ~30s
   - On error (disallowed symbol): `{"type":"error","error":"symbol_not_allowed","allowed":[...]} `
 
@@ -29,6 +29,12 @@ Allowed: `XAUUSD`, `USDCAD`, `USDJPY`, `GBPUSD`, `AUDUSD`, `AUS200`, `UK100`, `D
 - `previousClose`: Previous day's closing price (may be null)
 - `marketState`: Current market state (e.g., "REGULAR", "CLOSED", "PRE", "POST", may be null)
 - `regularMarketPrice`: Regular market price (may be null)
+- `indicators`: Object containing live technical indicator values (15m timeframe, may be null)
+  - Contains indicator values like RSI, MACD, EMA, SMA, etc.
+  - Example: `{"rsi": 65.2, "macd": 1.23, "ema_20": 2350.45, ...}`
+- `evaluation`: Object containing indicator signal directions (may be null)
+  - Contains evaluation results for each indicator
+  - Example: `{"rsi": "sell", "macd": "buy", "ema_trend": "bullish", ...}`
 
 Example (browser):
 
@@ -39,6 +45,22 @@ ws.onmessage = (e) => {
   if (msg.symbol && msg.bid !== undefined) {
     // update UI: msg.symbol, msg.bid, msg.time, msg.previousClose, msg.marketState, msg.regularMarketPrice
     console.log(`${msg.symbol}: Bid=${msg.bid}, PrevClose=${msg.previousClose}, Market=${msg.marketState}`);
+    
+    // Handle indicators data
+    if (msg.indicators) {
+      console.log("Indicators:", msg.indicators);
+      // Example: access specific indicators
+      if (msg.indicators.rsi) console.log(`RSI: ${msg.indicators.rsi}`);
+      if (msg.indicators.macd) console.log(`MACD: ${msg.indicators.macd}`);
+    }
+    
+    // Handle evaluation data
+    if (msg.evaluation) {
+      console.log("Evaluation:", msg.evaluation);
+      // Example: access specific evaluations
+      if (msg.evaluation.rsi) console.log(`RSI Signal: ${msg.evaluation.rsi}`);
+      if (msg.evaluation.macd) console.log(`MACD Signal: ${msg.evaluation.macd}`);
+    }
   }
 };
 ws.onclose = () => console.log("price stream closed");

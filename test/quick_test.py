@@ -29,6 +29,24 @@ async def quick_test():
             print(f'Market State: {data.get("marketState", "N/A")}')
             print(f'Regular Market Price: {data.get("regularMarketPrice", "N/A")}')
             
+            # Print indicators analysis
+            indicators = data.get("indicators")
+            if indicators:
+                print('\n📈 TECHNICAL INDICATORS:')
+                for indicator, value in indicators.items():
+                    print(f'  {indicator}: {value}')
+            else:
+                print('\n📈 TECHNICAL INDICATORS: None available')
+            
+            # Print evaluation analysis
+            evaluation = data.get("evaluation")
+            if evaluation:
+                print('\n🎯 SIGNAL EVALUATION:')
+                for indicator, signal in evaluation.items():
+                    print(f'  {indicator}: {signal}')
+            else:
+                print('\n🎯 SIGNAL EVALUATION: None available')
+            
     except Exception as e:
         print(f'❌ Error: {e}')
 

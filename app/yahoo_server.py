@@ -302,6 +302,33 @@ async def poll_loop():
                     except Exception as e:
                         print(f"Error getting historical data for {symbol}: {e}")
 
+                # Compute indicators for the symbol (using 15m timeframe by default)
+                indicators_data = None
+                evaluation_data = None
+                try:
+                    timeframe = "15m"  # Default timeframe for indicators
+                    count = 200  # Default count for indicators calculation
+                    
+                    # Fetch recent history and compute indicators
+                    df = fetch_history_df(symbol, timeframe, max(100, count))
+                    if df is not None and len(df) >= 3:
+                        ind = compute_indicators(df, INDICATOR_PARAMS)
+                        res = evaluate_signals(df, ind, INDICATOR_PARAMS)
+                        
+                        # Extract last values for each indicator series
+                        last_vals: dict[str, Any] = {}
+                        for k, series in ind.items():
+                            try:
+                                last_vals[k] = float(series.iloc[-1])
+                            except Exception:
+                                last_vals[k] = None
+                        
+                        directions = {name: r.direction for name, r in res.items()}
+                        indicators_data = last_vals
+                        evaluation_data = directions
+                except Exception as e:
+                    print(f"Error computing indicators for {symbol}: {e}")
+
                 payload = {
                     "symbol": symbol,
                     "time": ts_iso,
@@ -309,6 +336,8 @@ async def poll_loop():
                     "previousClose": previous_close,
                     "marketState": market_state,
                     "regularMarketPrice": regular_market_price,
+                    "indicators": indicators_data,
+                    "evaluation": evaluation_data,
                 }
 
                 dead: Set[WebSocket] = set()

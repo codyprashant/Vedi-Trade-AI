@@ -20,6 +20,8 @@ export default function LiveMonitor() {
   const [previousClose, setPreviousClose] = useState(null); // New state for previous close price
   const [marketState, setMarketState] = useState(null); // New state for market state
   const [regularMarketPrice, setRegularMarketPrice] = useState(null); // New state for regular market price
+  const [indicators, setIndicators] = useState(null); // New state for technical indicators
+  const [evaluation, setEvaluation] = useState(null); // New state for signal evaluation
   const [wsConnected, setWsConnected] = useState(false); // New state for WebSocket connection status
   const [lastUpdate, setLastUpdate] = useState(null); // New state for last update timestamp
   const [priceIssue, setPriceIssue] = useState(false); // Show UI message when no price received
@@ -109,6 +111,44 @@ export default function LiveMonitor() {
             setMarketState("REGULAR"); // Mock market state
             setRegularMarketPrice(mockPrice + (Math.random() * 0.5 - 0.25)); // Mock regular market price with slight variation
             
+            // Simulate indicators
+            setIndicators({
+              rsi: 45.2 + (Math.random() * 20 - 10),
+              macd: 1.23 + (Math.random() * 0.5 - 0.25),
+              ema_20: mockPrice + (Math.random() * 2 - 1),
+              sma_50: mockPrice + (Math.random() * 3 - 1.5),
+              bb_upper: mockPrice + 15 + (Math.random() * 5),
+              bb_lower: mockPrice - 15 + (Math.random() * 5)
+            });
+            
+            // Simulate evaluation
+            const signals = ['buy', 'sell', 'hold', 'strong_buy', 'strong_sell'];
+            setEvaluation({
+              rsi: signals[Math.floor(Math.random() * signals.length)],
+              macd: signals[Math.floor(Math.random() * signals.length)],
+              ema_trend: Math.random() > 0.5 ? 'bullish' : 'bearish',
+              overall: signals[Math.floor(Math.random() * signals.length)]
+            });
+            
+            // Simulate indicators
+            setIndicators({
+              rsi: 45.2 + (Math.random() * 20 - 10),
+              macd: 1.23 + (Math.random() * 0.5 - 0.25),
+              ema_20: mockPrice + (Math.random() * 2 - 1),
+              sma_50: mockPrice + (Math.random() * 3 - 1.5),
+              bb_upper: mockPrice + 15 + (Math.random() * 5),
+              bb_lower: mockPrice - 15 + (Math.random() * 5)
+            });
+            
+            // Simulate evaluation
+            const signals = ['buy', 'sell', 'hold', 'strong_buy', 'strong_sell'];
+            setEvaluation({
+              rsi: signals[Math.floor(Math.random() * signals.length)],
+              macd: signals[Math.floor(Math.random() * signals.length)],
+              ema_trend: Math.random() > 0.5 ? 'bullish' : 'bearish',
+              overall: signals[Math.floor(Math.random() * signals.length)]
+            });
+            
             setLastUpdate(new Date().toISOString()); // Set last update time
             lastTickAtRef.current = Date.now();
             setPriceIssue(false);
@@ -171,6 +211,8 @@ export default function LiveMonitor() {
               setPreviousClose(data.previousClose ? parseFloat(data.previousClose) : null);
               setMarketState(data.marketState || null);
               setRegularMarketPrice(data.regularMarketPrice ? parseFloat(data.regularMarketPrice) : null);
+              setIndicators(data.indicators || null);
+              setEvaluation(data.evaluation || null);
               
               setLastUpdate(data.time || new Date().toISOString()); // Use timestamp from data or current time
               lastTickAtRef.current = Date.now();
@@ -492,6 +534,62 @@ export default function LiveMonitor() {
                   </div>
                 )}
               </div>
+              
+              {/* Technical Indicators Section */}
+              {indicators && (
+                <div className="mt-4">
+                  <div className="text-sm font-semibold text-white/80 mb-2 flex items-center gap-2">
+                    <BarChart3 className="w-4 h-4" />
+                    Technical Indicators (15m)
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                    {Object.entries(indicators).map(([key, value]) => (
+                      <div 
+                        key={key}
+                        className="p-2 rounded-lg text-center"
+                        style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)' }}
+                      >
+                        <div className="text-xs text-blue-400/70 mb-1">{key.toUpperCase()}</div>
+                        <div className="text-sm font-semibold text-blue-400">
+                          {typeof value === 'number' ? value.toFixed(4) : value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Signal Evaluation Section */}
+              {evaluation && (
+                <div className="mt-4">
+                  <div className="text-sm font-semibold text-white/80 mb-2 flex items-center gap-2">
+                    <Zap className="w-4 h-4" />
+                    Signal Evaluation
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                    {Object.entries(evaluation).map(([key, signal]) => {
+                      const isPositive = signal === 'buy' || signal === 'bullish' || signal === 'strong_buy';
+                      const isNegative = signal === 'sell' || signal === 'bearish' || signal === 'strong_sell';
+                      const bgColor = isPositive ? 'rgba(34, 197, 94, 0.1)' : isNegative ? 'rgba(239, 68, 68, 0.1)' : 'rgba(156, 163, 175, 0.1)';
+                      const borderColor = isPositive ? 'rgba(34, 197, 94, 0.3)' : isNegative ? 'rgba(239, 68, 68, 0.3)' : 'rgba(156, 163, 175, 0.3)';
+                      const textColor = isPositive ? 'text-green-400' : isNegative ? 'text-red-400' : 'text-gray-400';
+                      
+                      return (
+                        <div 
+                          key={key}
+                          className="p-2 rounded-lg text-center"
+                          style={{ background: bgColor, border: `1px solid ${borderColor}` }}
+                        >
+                          <div className="text-xs text-gray-400/70 mb-1">{key.toUpperCase()}</div>
+                          <div className={`text-sm font-semibold ${textColor}`}>
+                            {signal}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               
               <div className="flex items-center justify-center gap-3 text-sm text-white/60">
                 <div className="flex items-center gap-2">

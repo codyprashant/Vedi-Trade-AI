@@ -56,6 +56,23 @@ async def test_websocket_extended():
                                 print(f"🏪 Market State: {data['marketState']}")
                             if data.get("regularMarketPrice") is not None:
                                 print(f"📈 Regular Market Price: ${data['regularMarketPrice']:.2f}")
+                            
+                            # Display indicators if available
+                            indicators = data.get("indicators")
+                            if indicators:
+                                print("📊 Technical Indicators:")
+                                for indicator, value in indicators.items():
+                                    if isinstance(value, (int, float)):
+                                        print(f"  {indicator}: {value:.4f}")
+                                    else:
+                                        print(f"  {indicator}: {value}")
+                            
+                            # Display evaluation if available
+                            evaluation = data.get("evaluation")
+                            if evaluation:
+                                print("🎯 Signal Evaluation:")
+                                for indicator, signal in evaluation.items():
+                                    print(f"  {indicator}: {signal}")
                                 
                         elif data.get("type") == "heartbeat":
                             print("💓 Heartbeat received")
