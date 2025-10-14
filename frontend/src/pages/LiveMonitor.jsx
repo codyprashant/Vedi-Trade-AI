@@ -95,12 +95,11 @@ export default function LiveMonitor() {
             const change = mockPrice - prev;
             setPriceChange(change);
 
-            // Simulate bid/ask/spread
-            const newBid = mockPrice - (Math.random() * 0.2 + 0.05); // Bid slightly lower than current price
-            const newAsk = mockPrice + (Math.random() * 0.2 + 0.05); // Ask slightly higher than current price
+            // Simulate bid price
+            const newBid = mockPrice; // Use mock price as bid
             setBid(newBid);
-            setAsk(newAsk);
-            setSpread(parseFloat((newAsk - newBid).toFixed(2))); // Calculate and format spread
+            setAsk(null); // No ask price in new format
+            setSpread(0); // No spread calculation
             setLastUpdate(new Date().toISOString()); // Set last update time
             lastTickAtRef.current = Date.now();
             setPriceIssue(false);
@@ -144,11 +143,9 @@ export default function LiveMonitor() {
             }
 
             // Handle price tick data
-            if (data.symbol && data.bid !== undefined && data.ask !== undefined) {
+            if (data.symbol && data.bid !== undefined) {
               const newBid = parseFloat(data.bid);
-              const newAsk = parseFloat(data.ask);
-              const lastVal = data.last !== undefined ? parseFloat(data.last) : NaN;
-              const newPrice = (!isNaN(lastVal) && lastVal > 0) ? lastVal : ((newBid + newAsk) / 2);
+              const newPrice = newBid; // Use bid as the current price
               
               setCurrentPrice(prev => {
                 setPreviousPrice(prev); // Store current price as previous
@@ -158,8 +155,8 @@ export default function LiveMonitor() {
               });
               
               setBid(newBid);
-              setAsk(newAsk);
-              setSpread(parseFloat((newAsk - newBid).toFixed(2))); // Calculate and format spread
+              setAsk(null); // No ask price available
+              setSpread(0); // No spread calculation possible
               setLastUpdate(data.time || new Date().toISOString()); // Use timestamp from data or current time
               lastTickAtRef.current = Date.now();
               setPriceIssue(false);
@@ -210,9 +207,9 @@ export default function LiveMonitor() {
             setPreviousPrice(prev); // Update previous price
             const mockPrice = prev + (Math.random() * 2 - 1); // Dynamic price
             setPriceChange(mockPrice - prev);
-            setBid(parseFloat((mockPrice - 0.15).toFixed(2))); // Fixed offset from mockPrice
-            setAsk(parseFloat((mockPrice + 0.15).toFixed(2))); // Fixed offset from mockPrice
-            setSpread(0.30); // Fixed spread
+            setBid(parseFloat(mockPrice.toFixed(2))); // Use mock price as bid
+            setAsk(null); // No ask price in new format
+            setSpread(0); // No spread calculation
             setLastUpdate(new Date().toISOString());
             lastTickAtRef.current = Date.now();
             setPriceIssue(false);
@@ -429,29 +426,15 @@ export default function LiveMonitor() {
                 </div>
               )}
 
-              {/* Bid/Ask/Spread Display */}
-              {(bid > 0 || ask > 0) && ( // Show when bid/ask available
-                <div className="grid grid-cols-3 gap-3 mb-4">
+              {/* Bid Price Display */}
+              {bid > 0 && ( // Show when bid is available
+                <div className="grid grid-cols-1 gap-3 mb-4">
                   <div 
-                    className="p-2 rounded-xl"
-                    style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+                    className="p-3 rounded-xl text-center"
+                    style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)' }}
                   >
-                    <div className="text-[10px] text-red-400/70 mb-0.5">Bid</div>
-                    <div className="text-sm font-bold text-red-400">${bid.toFixed(2)}</div>
-                  </div>
-                  <div 
-                    className="p-2 rounded-xl"
-                    style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)' }}
-                  >
-                    <div className="text-[10px] text-green-400/70 mb-0.5">Ask</div>
-                    <div className="text-sm font-bold text-green-400">${ask.toFixed(2)}</div>
-                  </div>
-                  <div 
-                    className="p-2 rounded-xl"
-                    style={{ background: 'rgba(251, 191, 36, 0.1)', border: '1px solid rgba(251, 191, 36, 0.3)' }}
-                  >
-                    <div className="text-[10px] text-amber-400/70 mb-0.5">Spread</div>
-                    <div className="text-sm font-bold text-amber-400">${spread.toFixed(2)}</div>
+                    <div className="text-xs text-blue-400/70 mb-1">Current Bid Price</div>
+                    <div className="text-lg font-bold text-blue-400">${bid.toFixed(2)}</div>
                   </div>
                 </div>
               )}

@@ -17,7 +17,7 @@ Allowed: `XAUUSD`, `USDCAD`, `USDJPY`, `GBPUSD`, `AUDUSD`, `AUS200`, `UK100`, `D
 
 - Endpoint: `GET ws://<host>/ws/prices?symbol=XAUUSD`
 - Messages:
-  - `{"type":"tick","symbol":"XAUUSD","last":<number>,"bid":<number>,"ask":<number>,"ts":"<iso>"}`
+  - `{"symbol":"XAUUSD","time":"<iso>","bid":<number>}`
   - `{"type":"heartbeat","ts":"<iso>"}` every ~30s
   - On error (disallowed symbol): `{"type":"error","error":"symbol_not_allowed","allowed":[...]} `
 
@@ -27,8 +27,8 @@ Example (browser):
 const ws = new WebSocket("ws://localhost:8000/ws/prices?symbol=XAUUSD");
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
-  if (msg.type === "tick") {
-    // update UI: msg.last, msg.bid, msg.ask, msg.ts
+  if (msg.symbol && msg.bid !== undefined) {
+    // update UI: msg.symbol, msg.bid, msg.time
   }
 };
 ws.onclose = () => console.log("price stream closed");

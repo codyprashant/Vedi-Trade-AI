@@ -262,41 +262,38 @@ async def poll_loop():
                 ticker = yf.Ticker(y_symbol)
 
                 bid = None
-                ask = None
-                last = None
                 ts_iso = datetime.now(timezone.utc).isoformat()
 
                 # Try fast_info first (lightweight)
                 try:
                     fi = getattr(ticker, "fast_info", None)
                     if fi:
-                        bid = float(fi.get("bid", None)) if fi.get("bid", None) is not None else None
-                        ask = float(fi.get("ask", None)) if fi.get("ask", None) is not None else None
-                        last = float(fi.get("last_price", None)) if fi.get("last_price", None) is not None else None
-                except Exception:
-                    pass
+                        # Use lastPrice as bid value
+                        lastPrice_raw = fi.get("lastPrice", None)
+                        bid = float(lastPrice_raw) if lastPrice_raw is not None else None
+                except Exception as e:
+                    print(f"Error getting fast_info for {symbol}: {e}")
 
                 # Fallback to latest 1m candle close
-                if last is None:
+                if bid is None:
                     try:
                         hist = ticker.history(period="1d", interval="1m")
                         if hist is not None and not hist.empty:
                             row = hist.tail(1)
-                            last = float(row["Close"].iloc[0])
+                            bid = float(row["Close"].iloc[0])
                             idx = row.index[-1]
+                            
                             try:
                                 ts_iso = pd.Timestamp(idx).tz_convert("UTC").isoformat()
                             except Exception:
                                 ts_iso = pd.Timestamp(idx).tz_localize("UTC").isoformat()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"Error getting historical data for {symbol}: {e}")
 
                 payload = {
                     "symbol": symbol,
                     "time": ts_iso,
                     "bid": bid,
-                    "ask": ask,
-                    "last": last,
                 }
 
                 dead: Set[WebSocket] = set()
