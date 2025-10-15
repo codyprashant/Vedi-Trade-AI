@@ -1,0 +1,51 @@
+{
+  "timestamp": "2025-10-15T13:41:29.107511",
+  "overall_status": "FAILED",
+  "health_score": 0,
+  "total_duration": 4.584148406982422,
+  "total_tests": 0,
+  "passed_tests": 0,
+  "test_suites": {
+    "test_adaptive_signal_system.py": {
+      "status": "failed",
+      "return_code": 1,
+      "duration": 2.0268752574920654,
+      "tests_run": 0,
+      "tests_passed": 0,
+      "output": "======================================================================\nADAPTIVE SIGNAL GENERATION SYSTEM TEST SUITE\n======================================================================\n",
+      "error": "Traceback (most recent call last):\n  File \"D:\\Trading\\priceTracker\\test\\test_adaptive_signal_system.py\", line 467, in <module>\n    asyncio.run(main())\n  File \"C:\\Python312\\Lib\\asyncio\\runners.py\", line 194, in run\n    return runner.run(main)\n           ^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\asyncio\\runners.py\", line 118, in run\n    return self._loop.run_until_complete(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\asyncio\\base_events.py\", line 684, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"D:\\Trading\\priceTracker\\test\\test_adaptive_signal_system.py\", line 456, in main\n    success = await test_suite.run_all_tests()\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\Trading\\priceTracker\\test\\test_adaptive_signal_system.py\", line 421, in run_all_tests\n    print(f\"\\n\\U0001f9ea {test_name}\")\n  File \"C:\\Python312\\Lib\\encodings\\cp1252.py\", line 19, in encode\n    return codecs.charmap_encode(input,self.errors,encoding_table)[0]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'charmap' codec can't encode character '\\U0001f9ea' in position 2: character maps to <undefined>\n"
+    },
+    "test_market_regime_detection.py": {
+      "status": "failed",
+      "return_code": 1,
+      "duration": 0.6752452850341797,
+      "tests_run": 0,
+      "tests_passed": 0,
+      "output": "======================================================================\n",
+      "error": "Traceback (most recent call last):\n  File \"D:\\Trading\\priceTracker\\test\\test_market_regime_detection.py\", line 465, in <module>\n    success = test_suite.run_all_tests()\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\Trading\\priceTracker\\test\\test_market_regime_detection.py\", line 434, in run_all_tests\n    print(\"\\U0001f52c MARKET REGIME DETECTION TEST SUITE\")\n  File \"C:\\Python312\\Lib\\encodings\\cp1252.py\", line 19, in encode\n    return codecs.charmap_encode(input,self.errors,encoding_table)[0]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'charmap' codec can't encode character '\\U0001f52c' in position 0: character maps to <undefined>\n"
+    },
+    "test_edge_cases.py": {
+      "status": "failed",
+      "return_code": 1,
+      "duration": 0.5730729103088379,
+      "tests_run": 0,
+      "tests_passed": 0,
+      "output": "======================================================================\n",
+      "error": "Traceback (most recent call last):\n  File \"D:\\Trading\\priceTracker\\test\\test_edge_cases.py\", line 464, in <module>\n    success = test_suite.run_all_tests()\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\Trading\\priceTracker\\test\\test_edge_cases.py\", line 432, in run_all_tests\n    print(\"\\U0001f52c EDGE CASES AND ERROR HANDLING TEST SUITE\")\n  File \"C:\\Python312\\Lib\\encodings\\cp1252.py\", line 19, in encode\n    return codecs.charmap_encode(input,self.errors,encoding_table)[0]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'charmap' codec can't encode character '\\U0001f52c' in position 0: character maps to <undefined>\n"
+    },
+    "test_enhanced_signal_system.py": {
+      "status": "failed",
+      "return_code": 1,
+      "duration": 1.3047969341278076,
+      "tests_run": 0,
+      "tests_passed": 0,
+      "output": "============================================================\nENHANCED VEDI TRADE AI SIGNAL SYSTEM TEST SUITE\n============================================================\n",
+      "error": "Traceback (most recent call last):\n  File \"D:\\Trading\\priceTracker\\test\\test_enhanced_signal_system.py\", line 441, in <module>\n    asyncio.run(main())\n  File \"C:\\Python312\\Lib\\asyncio\\runners.py\", line 194, in run\n    return runner.run(main)\n           ^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\asyncio\\runners.py\", line 118, in run\n    return self._loop.run_until_complete(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\asyncio\\base_events.py\", line 684, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"D:\\Trading\\priceTracker\\test\\test_enhanced_signal_system.py\", line 430, in main\n    success = await test_suite.run_all_tests()\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\Trading\\priceTracker\\test\\test_enhanced_signal_system.py\", line 399, in run_all_tests\n    print(f\"\\n\\U0001f9ea {test_name}\")\n  File \"C:\\Python312\\Lib\\encodings\\cp1252.py\", line 19, in encode\n    return codecs.charmap_encode(input,self.errors,encoding_table)[0]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'charmap' codec can't encode character '\\U0001f9ea' in position 2: character maps to <undefined>\n"
+    }
+  },
+  "system_info": {
+    "python_version": "3.12.1 (tags/v3.12.1:2305ca5, Dec  7 2023, 22:03:25) [MSC v.1937 64 bit (AMD64)]",
+    "platform": "win32",
+    "test_directory": "D:\\Trading\\priceTracker\\test"
+  }
+}

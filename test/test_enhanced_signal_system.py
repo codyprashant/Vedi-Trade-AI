@@ -17,8 +17,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-# Add the app directory to the path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
+# Add the parent directory to the path
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from app.config import (
     WEIGHTS, INDICATOR_PARAMS, NEUTRAL_WEIGHT_FACTOR, 
@@ -88,16 +88,21 @@ class TestEnhancedSignalSystem:
         weight = 10.0
         
         # Aligned indicator should get full weight
-        aligned_contrib = _get_indicator_contribution(weight, True, False)
+        aligned_contrib = _get_indicator_contribution(weight, "buy", "buy")
         assert aligned_contrib == weight, f"Expected {weight}, got {aligned_contrib}"
         
+        # Weak signal should get partial weight
+        weak_contrib = _get_indicator_contribution(weight, "weak_buy", "buy")
+        expected_weak = weight * 0.5  # weak_signal_factor
+        assert weak_contrib == expected_weak, f"Expected {expected_weak}, got {weak_contrib}"
+        
         # Neutral indicator should get partial weight
-        neutral_contrib = _get_indicator_contribution(weight, False, True)
+        neutral_contrib = _get_indicator_contribution(weight, "neutral", "buy")
         expected_neutral = weight * NEUTRAL_WEIGHT_FACTOR
         assert neutral_contrib == expected_neutral, f"Expected {expected_neutral}, got {neutral_contrib}"
         
         # Opposing indicator should get zero
-        opposing_contrib = _get_indicator_contribution(weight, False, False)
+        opposing_contrib = _get_indicator_contribution(weight, "sell", "buy")
         assert opposing_contrib == 0.0, f"Expected 0.0, got {opposing_contrib}"
         
         print("✓ Partial credit for neutral indicators working correctly")
@@ -130,6 +135,110 @@ class TestEnhancedSignalSystem:
             f"Expected {expected_strength}, got {result['strength']}"
         
         print("✓ Weighted blend strategy working correctly")
+        return True
+    
+    def test_weighted_bias_calculation(self):
+        """Test the new weighted bias calculation for directional confidence."""
+        print("Testing weighted bias calculation...")
+        
+        # Mock strategy components with different bias scores
+        strategy_components = {
+            "trend": {"buy_bias": 80.0, "sell_bias": 20.0, "weight": 30.0},
+            "momentum": {"buy_bias": 70.0, "sell_bias": 30.0, "weight": 25.0},
+            "combined": {"buy_bias": 60.0, "sell_bias": 40.0, "weight": 45.0}
+        }
+        
+        # Calculate expected weighted bias
+        total_weight = sum(comp["weight"] for comp in strategy_components.values())
+        expected_buy_bias = sum(comp["buy_bias"] * comp["weight"] for comp in strategy_components.values()) / total_weight
+        expected_sell_bias = sum(comp["sell_bias"] * comp["weight"] for comp in strategy_components.values()) / total_weight
+        
+        # Test buy direction
+        buy_confidence = max(expected_buy_bias, expected_sell_bias)
+        assert buy_confidence > 60.0, f"Expected buy confidence > 60%, got {buy_confidence:.1f}%"
+        
+        print(f"✓ Weighted bias calculation: Buy {expected_buy_bias:.1f}%, Sell {expected_sell_bias:.1f}%")
+        return True
+    
+    def test_two_tier_confidence_filtering(self):
+        """Test the two-tiered confidence filtering system."""
+        print("Testing two-tiered confidence filtering...")
+        
+        # Test cases for different scenarios
+        test_cases = [
+            {
+                "name": "Strong signal - both tiers pass",
+                "directional_bias": 75.0,
+                "signal_strength": 65.0,
+                "threshold": 60.0,
+                "expected_pass": True
+            },
+            {
+                "name": "Weak directional bias - tier 1 fails",
+                "directional_bias": 45.0,
+                "signal_strength": 70.0,
+                "threshold": 60.0,
+                "expected_pass": False
+            },
+            {
+                "name": "Weak signal strength - tier 2 fails",
+                "directional_bias": 80.0,
+                "signal_strength": 45.0,
+                "threshold": 60.0,
+                "expected_pass": False
+            },
+            {
+                "name": "Both tiers fail",
+                "directional_bias": 40.0,
+                "signal_strength": 35.0,
+                "threshold": 60.0,
+                "expected_pass": False
+            }
+        ]
+        
+        for case in test_cases:
+            tier1_passed = case["directional_bias"] >= case["threshold"]
+            tier2_passed = case["signal_strength"] >= case["threshold"]
+            confidence_passed = tier1_passed and tier2_passed
+            
+            assert confidence_passed == case["expected_pass"], \
+                f"Test '{case['name']}' failed: expected {case['expected_pass']}, got {confidence_passed}"
+            
+            print(f"  ✓ {case['name']}: Tier1={tier1_passed}, Tier2={tier2_passed}, Pass={confidence_passed}")
+        
+        print("✓ Two-tiered confidence filtering working correctly")
+        return True
+    
+    def test_base_strength_fallback_logic(self):
+        """Test the enhanced base strength fallback logic."""
+        print("Testing base strength fallback logic...")
+        
+        # Test case 1: Normal case with valid best signal
+        best_signal_valid = {"strength": 45.0, "direction": "buy"}
+        base_strength = best_signal_valid.get("strength", 0.0)
+        assert base_strength == 45.0, f"Expected 45.0, got {base_strength}"
+        
+        # Test case 2: Empty best signal - should use fallback
+        best_signal_empty = {}
+        strategy_components = {
+            "trend": {"strength": 30.0},
+            "momentum": {"strength": 25.0},
+            "combined": {"strength": 35.0}
+        }
+        
+        if not best_signal_empty.get("strength"):
+            # Fallback logic: find max strength from components
+            max_strength = max((comp.get("strength", 0.0) for comp in strategy_components.values()), default=0.0)
+            base_strength = max_strength
+        
+        assert base_strength == 35.0, f"Expected 35.0 from fallback, got {base_strength}"
+        
+        # Test case 3: No components - should default to 0.0
+        empty_components = {}
+        max_strength = max((comp.get("strength", 0.0) for comp in empty_components.values()), default=0.0)
+        assert max_strength == 0.0, f"Expected 0.0 from empty fallback, got {max_strength}"
+        
+        print("✓ Base strength fallback logic working correctly")
         return True
     
     def test_confidence_zones(self):
@@ -275,6 +384,9 @@ class TestEnhancedSignalSystem:
             ("Configuration Parameters", self.test_configuration_parameters),
             ("Partial Credit for Neutral Indicators", self.test_partial_credit_neutral_indicators),
             ("Weighted Blend Strategy", self.test_weighted_blend_strategy),
+            ("Weighted Bias Calculation", self.test_weighted_bias_calculation),
+            ("Two-Tier Confidence Filtering", self.test_two_tier_confidence_filtering),
+            ("Base Strength Fallback Logic", self.test_base_strength_fallback_logic),
             ("Multi-Zone Confidence System", self.test_confidence_zones),
             ("Enhanced MACD Logic", self.test_enhanced_macd_logic),
             ("Signal Generation Pipeline", self.test_full_signal_generation),

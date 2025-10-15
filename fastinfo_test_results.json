@@ -1,0 +1,662 @@
+{
+  "XAUUSD": {
+    "symbol": "XAUUSD",
+    "yahoo_symbol": "GC=F",
+    "fast_info_available": true,
+    "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
+    "timestamp": "2025-10-15T13:48:00.789349",
+    "available_keys": [
+      "currency",
+      "dayHigh",
+      "dayLow",
+      "exchange",
+      "fiftyDayAverage",
+      "lastPrice",
+      "lastVolume",
+      "marketCap",
+      "open",
+      "previousClose",
+      "quoteType",
+      "regularMarketPreviousClose",
+      "shares",
+      "tenDayAverageVolume",
+      "threeMonthAverageVolume",
+      "timezone",
+      "twoHundredDayAverage",
+      "yearChange",
+      "yearHigh",
+      "yearLow"
+    ],
+    "key_count": 20,
+    "key_values": {
+      "currency": {
+        "value": "USD",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "dayHigh": {
+        "value": 4235.7998046875,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "dayLow": {
+        "value": 4157.2998046875,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "exchange": {
+        "value": "CMX",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "fiftyDayAverage": {
+        "value": 3623.1939990234373,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastPrice": {
+        "value": 4218.39990234375,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastVolume": {
+        "value": 147914,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "marketCap": {
+        "value": null,
+        "type": "<class 'NoneType'>",
+        "is_none": true
+      },
+      "open": {
+        "value": 4160.10009765625,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "previousClose": {
+        "value": 4206.0,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "quoteType": {
+        "value": "FUTURE",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "regularMarketPreviousClose": {
+        "value": 4138.7001953125,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "shares": {
+        "value": null,
+        "type": "<class 'NoneType'>",
+        "is_none": true
+      },
+      "tenDayAverageVolume": {
+        "value": 2015,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "threeMonthAverageVolume": {
+        "value": 3609,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "timezone": {
+        "value": "America/New_York",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "twoHundredDayAverage": {
+        "value": 3247.6444437046243,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearChange": {
+        "value": 0.5477562435723635,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearHigh": {
+        "value": 4160.10009765625,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearLow": {
+        "value": 2554.199951171875,
+        "type": "<class 'float'>",
+        "is_none": false
+      }
+    }
+  },
+  "USDCAD": {
+    "symbol": "USDCAD",
+    "yahoo_symbol": "USDCAD=X",
+    "fast_info_available": true,
+    "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
+    "timestamp": "2025-10-15T13:48:02.656314",
+    "available_keys": [
+      "currency",
+      "dayHigh",
+      "dayLow",
+      "exchange",
+      "fiftyDayAverage",
+      "lastPrice",
+      "lastVolume",
+      "marketCap",
+      "open",
+      "previousClose",
+      "quoteType",
+      "regularMarketPreviousClose",
+      "shares",
+      "tenDayAverageVolume",
+      "threeMonthAverageVolume",
+      "timezone",
+      "twoHundredDayAverage",
+      "yearChange",
+      "yearHigh",
+      "yearLow"
+    ],
+    "key_count": 20,
+    "key_values": {
+      "currency": {
+        "value": "CAD",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "dayHigh": {
+        "value": 1.4048199653625488,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "dayLow": {
+        "value": 1.402400016784668,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "exchange": {
+        "value": "CCY",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "fiftyDayAverage": {
+        "value": 1.3844206047058105,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastPrice": {
+        "value": 1.403689980506897,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastVolume": {
+        "value": 0,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "marketCap": {
+        "value": null,
+        "type": "<class 'NoneType'>",
+        "is_none": true
+      },
+      "open": {
+        "value": 1.4042500257492065,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "previousClose": {
+        "value": 1.4041999578475952,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "quoteType": {
+        "value": "CURRENCY",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "regularMarketPreviousClose": {
+        "value": 1.4039000272750854,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "shares": {
+        "value": null,
+        "type": "<class 'NoneType'>",
+        "is_none": true
+      },
+      "tenDayAverageVolume": {
+        "value": 0,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "threeMonthAverageVolume": {
+        "value": 0,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "timezone": {
+        "value": "Europe/London",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "twoHundredDayAverage": {
+        "value": 1.3975754091233918,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearChange": {
+        "value": 0.018714017866990184,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearHigh": {
+        "value": 1.479099988937378,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearLow": {
+        "value": 1.3540600538253784,
+        "type": "<class 'float'>",
+        "is_none": false
+      }
+    }
+  },
+  "GBPUSD": {
+    "symbol": "GBPUSD",
+    "yahoo_symbol": "GBPUSD=X",
+    "fast_info_available": true,
+    "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
+    "timestamp": "2025-10-15T13:48:03.581050",
+    "available_keys": [
+      "currency",
+      "dayHigh",
+      "dayLow",
+      "exchange",
+      "fiftyDayAverage",
+      "lastPrice",
+      "lastVolume",
+      "marketCap",
+      "open",
+      "previousClose",
+      "quoteType",
+      "regularMarketPreviousClose",
+      "shares",
+      "tenDayAverageVolume",
+      "threeMonthAverageVolume",
+      "timezone",
+      "twoHundredDayAverage",
+      "yearChange",
+      "yearHigh",
+      "yearLow"
+    ],
+    "key_count": 20,
+    "key_values": {
+      "currency": {
+        "value": "USD",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "dayHigh": {
+        "value": 1.3373095989227295,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "dayLow": {
+        "value": 1.3317352533340454,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "exchange": {
+        "value": "CCY",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "fiftyDayAverage": {
+        "value": 1.347447283267975,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastPrice": {
+        "value": 1.3354344367980957,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastVolume": {
+        "value": 0,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "marketCap": {
+        "value": null,
+        "type": "<class 'NoneType'>",
+        "is_none": true
+      },
+      "open": {
+        "value": 1.3318772315979004,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "previousClose": {
+        "value": 1.3320368528366089,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "quoteType": {
+        "value": "CURRENCY",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "regularMarketPreviousClose": {
+        "value": 1.3332622051239014,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "shares": {
+        "value": null,
+        "type": "<class 'NoneType'>",
+        "is_none": true
+      },
+      "tenDayAverageVolume": {
+        "value": 0,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "threeMonthAverageVolume": {
+        "value": 0,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "timezone": {
+        "value": "Europe/London",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "twoHundredDayAverage": {
+        "value": 1.3176681369242043,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearChange": {
+        "value": 0.020412233545118345,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearHigh": {
+        "value": 1.3788729906082153,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearLow": {
+        "value": 1.2101263999938965,
+        "type": "<class 'float'>",
+        "is_none": false
+      }
+    }
+  },
+  "SPX": {
+    "symbol": "SPX",
+    "yahoo_symbol": "^GSPC",
+    "fast_info_available": true,
+    "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
+    "timestamp": "2025-10-15T13:48:04.369949",
+    "available_keys": [
+      "currency",
+      "dayHigh",
+      "dayLow",
+      "exchange",
+      "fiftyDayAverage",
+      "lastPrice",
+      "lastVolume",
+      "marketCap",
+      "open",
+      "previousClose",
+      "quoteType",
+      "regularMarketPreviousClose",
+      "shares",
+      "tenDayAverageVolume",
+      "threeMonthAverageVolume",
+      "timezone",
+      "twoHundredDayAverage",
+      "yearChange",
+      "yearHigh",
+      "yearLow"
+    ],
+    "key_count": 20,
+    "key_values": {
+      "currency": {
+        "value": "USD",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "dayHigh": {
+        "value": 6680.7001953125,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "dayLow": {
+        "value": 6555.06982421875,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "exchange": {
+        "value": "SNP",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "fiftyDayAverage": {
+        "value": 6544.438984375,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastPrice": {
+        "value": 6644.31005859375,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastVolume": {
+        "value": 5666920000,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "marketCap": {
+        "value": null,
+        "type": "<class 'NoneType'>",
+        "is_none": true
+      },
+      "open": {
+        "value": 6602.490234375,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "previousClose": {
+        "value": 6654.72,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "quoteType": {
+        "value": "INDEX",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "regularMarketPreviousClose": {
+        "value": 6654.72021484375,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "shares": {
+        "value": null,
+        "type": "<class 'NoneType'>",
+        "is_none": true
+      },
+      "tenDayAverageVolume": {
+        "value": 5544185000,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "threeMonthAverageVolume": {
+        "value": 5185220461,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "timezone": {
+        "value": "America/New_York",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "twoHundredDayAverage": {
+        "value": 6055.933391113282,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearChange": {
+        "value": 0.13724329166673283,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearHigh": {
+        "value": 6764.580078125,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearLow": {
+        "value": 4835.0400390625,
+        "type": "<class 'float'>",
+        "is_none": false
+      }
+    }
+  },
+  "AAPL": {
+    "symbol": "AAPL",
+    "yahoo_symbol": "AAPL",
+    "fast_info_available": true,
+    "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
+    "timestamp": "2025-10-15T13:48:05.082450",
+    "available_keys": [
+      "currency",
+      "dayHigh",
+      "dayLow",
+      "exchange",
+      "fiftyDayAverage",
+      "lastPrice",
+      "lastVolume",
+      "marketCap",
+      "open",
+      "previousClose",
+      "quoteType",
+      "regularMarketPreviousClose",
+      "shares",
+      "tenDayAverageVolume",
+      "threeMonthAverageVolume",
+      "timezone",
+      "twoHundredDayAverage",
+      "yearChange",
+      "yearHigh",
+      "yearLow"
+    ],
+    "key_count": 20,
+    "key_values": {
+      "currency": {
+        "value": "USD",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "dayHigh": {
+        "value": 248.85000610351562,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "dayLow": {
+        "value": 244.6999969482422,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "exchange": {
+        "value": "NMS",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "fiftyDayAverage": {
+        "value": 238.8127993774414,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastPrice": {
+        "value": 247.77000427246094,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "lastVolume": {
+        "value": 35447900,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "marketCap": {
+        "value": 3677003493704.9863,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "open": {
+        "value": 246.60000610351562,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "previousClose": {
+        "value": 247.36,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "quoteType": {
+        "value": "EQUITY",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "regularMarketPreviousClose": {
+        "value": 247.66000366210938,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "shares": {
+        "value": 14840390000,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "tenDayAverageVolume": {
+        "value": 42752840,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "threeMonthAverageVolume": {
+        "value": 54531018,
+        "type": "<class 'int'>",
+        "is_none": false
+      },
+      "timezone": {
+        "value": "America/New_York",
+        "type": "<class 'str'>",
+        "is_none": false
+      },
+      "twoHundredDayAverage": {
+        "value": 222.1646499633789,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearChange": {
+        "value": 0.06898785735342892,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearHigh": {
+        "value": 260.1000061035156,
+        "type": "<class 'float'>",
+        "is_none": false
+      },
+      "yearLow": {
+        "value": 169.2100067138672,
+        "type": "<class 'float'>",
+        "is_none": false
+      }
+    }
+  }
+}

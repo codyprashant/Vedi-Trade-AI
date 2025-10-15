@@ -20,7 +20,7 @@ from .config import (
 )
 
 
-Direction = Literal["buy", "sell", "neutral"]
+Direction = Literal["buy", "sell", "neutral", "weak_buy", "weak_sell"]
 
 
 @dataclass
@@ -64,12 +64,16 @@ def compute_indicators(df: pd.DataFrame, params: Dict[str, Dict] | None = None) 
         if isinstance(macd, pd.DataFrame) and macd.shape[1] >= 2:
             ind["macd"] = macd[macd.columns[0]].rename("macd")
             ind["macd_signal"] = macd[macd.columns[1]].rename("macd_signal")
+            # Calculate histogram (MACD - Signal)
+            ind["macd_histogram"] = (ind["macd"] - ind["macd_signal"]).rename("macd_histogram")
         else:
             ind["macd"] = _nan_series("macd")
             ind["macd_signal"] = _nan_series("macd_signal")
+            ind["macd_histogram"] = _nan_series("macd_histogram")
     except Exception:
         ind["macd"] = _nan_series("macd")
         ind["macd_signal"] = _nan_series("macd_signal")
+        ind["macd_histogram"] = _nan_series("macd_histogram")
 
     # SMA - Multiple periods
     try:
@@ -173,18 +177,30 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
         except (ValueError, TypeError):
             return None
 
-    # RSI
+    # Enhanced RSI with soft directional weights
     rsi_val = safe_float(ind["rsi"].iloc[-1])
     if rsi_val is not None:
-        rsi_dir: Direction = "buy" if rsi_val < params["RSI"]["oversold"] else (
-            "sell" if rsi_val > params["RSI"]["overbought"] else "neutral"
-        )
+        # Enhanced logic with weak signals
+        if rsi_val <= 25:  # Strong oversold
+            rsi_dir: Direction = "buy"
+        elif rsi_val <= 35:  # Weak oversold  
+            rsi_dir = "weak_buy"
+        elif rsi_val >= 75:  # Strong overbought
+            rsi_dir = "sell"
+        elif rsi_val >= 65:  # Weak overbought
+            rsi_dir = "weak_sell"
+        elif 45 <= rsi_val <= 55:  # True neutral zone
+            rsi_dir = "neutral"
+        elif rsi_val < 45:  # Slight bullish bias
+            rsi_dir = "weak_buy"
+        else:  # rsi_val > 55, slight bearish bias
+            rsi_dir = "weak_sell"
     else:
         rsi_dir = "neutral"
         rsi_val = np.nan
     results["RSI"] = IndicatorResult(rsi_dir, {"rsi": rsi_val}, 0)
 
-    # MACD cross and histogram
+    # Enhanced MACD with histogram magnitude and soft signals
     macd_val = safe_float(ind["macd"].iloc[-1])
     macd_sig = safe_float(ind["macd_signal"].iloc[-1])
     macd_prev = safe_float(ind["macd"].iloc[-2])
@@ -193,24 +209,30 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     macd_dir: Direction = "neutral"
     
     if all(v is not None for v in [macd_val, macd_sig, macd_prev, macd_sig_prev]):
-        # Traditional crossover signals
+        # Traditional crossover signals (strong)
         if _cross_over(macd_prev, macd_sig_prev, macd_val, macd_sig):
             macd_dir = "buy"
         elif _cross_under(macd_prev, macd_sig_prev, macd_val, macd_sig):
             macd_dir = "sell"
-        # Enhanced: histogram magnitude check
-        elif macd_hist is not None and abs(macd_hist) >= params.get("MACD_HIST_MIN", MACD_HIST_MIN):
-            if macd_hist > 0:
-                macd_dir = "buy"
-            else:
-                macd_dir = "sell"
+        # Enhanced: histogram magnitude check with soft signals
+        elif macd_hist is not None:
+            hist_threshold = params.get("MACD_HIST_MIN", MACD_HIST_MIN)
+            if abs(macd_hist) >= hist_threshold:
+                macd_dir = "buy" if macd_hist > 0 else "sell"
+            elif abs(macd_hist) >= hist_threshold * 0.5:  # Weak signal threshold
+                macd_dir = "weak_buy" if macd_hist > 0 else "weak_sell"
+            # Additional soft bias based on MACD line position
+            elif macd_val > macd_sig:
+                macd_dir = "weak_buy"
+            elif macd_val < macd_sig:
+                macd_dir = "weak_sell"
     
     # Use original values for output (including NaN if present)
     macd_val_out = float(ind["macd"].iloc[-1]) if macd_val is not None else np.nan
     macd_sig_out = float(ind["macd_signal"].iloc[-1]) if macd_sig is not None else np.nan
     results["MACD"] = IndicatorResult(macd_dir, {"macd": macd_val_out, "signal": macd_sig_out}, 0)
 
-    # SMA cross
+    # Enhanced SMA cross with trend strength
     sma_s = safe_float(ind["sma_short"].iloc[-1])
     sma_l = safe_float(ind["sma_long"].iloc[-1])
     sma_s_prev = safe_float(ind["sma_short"].iloc[-2])
@@ -218,17 +240,25 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     sma_dir: Direction = "neutral"
     
     if all(v is not None for v in [sma_s, sma_l, sma_s_prev, sma_l_prev]):
+        # Traditional crossover signals (strong)
         if _cross_over(sma_s_prev, sma_l_prev, sma_s, sma_l):
             sma_dir = "buy"
         elif _cross_under(sma_s_prev, sma_l_prev, sma_s, sma_l):
             sma_dir = "sell"
+        # Enhanced: trend strength based on separation
+        else:
+            separation_pct = abs(sma_s - sma_l) / sma_l * 100 if sma_l > 0 else 0
+            if separation_pct >= 0.5:  # Strong trend
+                sma_dir = "buy" if sma_s > sma_l else "sell"
+            elif separation_pct >= 0.1:  # Weak trend
+                sma_dir = "weak_buy" if sma_s > sma_l else "weak_sell"
     
     # Use original values for output (including NaN if present)
     sma_s_out = float(ind["sma_short"].iloc[-1]) if sma_s is not None else np.nan
     sma_l_out = float(ind["sma_long"].iloc[-1]) if sma_l is not None else np.nan
     results["SMA"] = IndicatorResult(sma_dir, {"sma50": sma_s_out, "sma200": sma_l_out}, 0)
 
-    # EMA cross
+    # Enhanced EMA cross with trend strength
     ema_s = safe_float(ind["ema_short"].iloc[-1])
     ema_l = safe_float(ind["ema_long"].iloc[-1])
     ema_s_prev = safe_float(ind["ema_short"].iloc[-2])
@@ -236,27 +266,51 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     ema_dir: Direction = "neutral"
     
     if all(v is not None for v in [ema_s, ema_l, ema_s_prev, ema_l_prev]):
+        # Traditional crossover signals (strong)
         if _cross_over(ema_s_prev, ema_l_prev, ema_s, ema_l):
             ema_dir = "buy"
         elif _cross_under(ema_s_prev, ema_l_prev, ema_s, ema_l):
             ema_dir = "sell"
+        # Enhanced: trend strength based on separation
+        else:
+            separation_pct = abs(ema_s - ema_l) / ema_l * 100 if ema_l > 0 else 0
+            if separation_pct >= 0.5:  # Strong trend
+                ema_dir = "buy" if ema_s > ema_l else "sell"
+            elif separation_pct >= 0.1:  # Weak trend
+                ema_dir = "weak_buy" if ema_s > ema_l else "weak_sell"
     
     # Use original values for output (including NaN if present)
     ema_s_out = float(ind["ema_short"].iloc[-1]) if ema_s is not None else np.nan
     ema_l_out = float(ind["ema_long"].iloc[-1]) if ema_l is not None else np.nan
     results["EMA"] = IndicatorResult(ema_dir, {"ema20": ema_s_out, "ema50": ema_l_out}, 0)
 
-    # Bollinger + RSI condition
+    # Enhanced Bollinger + RSI condition with soft signals
     bb_low = safe_float(ind["bb_low"].iloc[-1])
     bb_high = safe_float(ind["bb_high"].iloc[-1])
+    bb_mid = safe_float(ind["bb_mid"].iloc[-1]) if "bb_mid" in ind else None
     close = safe_float(last["close"])
     bb_dir: Direction = "neutral"
     
     if all(v is not None for v in [bb_low, bb_high, close, rsi_val]):
+        # Strong signals (original logic)
         if close <= bb_low and rsi_val < params["RSI"]["oversold"]:
             bb_dir = "buy"
         elif close >= bb_high and rsi_val > params["RSI"]["overbought"]:
             bb_dir = "sell"
+        # Enhanced: soft signals based on band position
+        elif bb_mid is not None:
+            band_width = bb_high - bb_low
+            lower_zone = bb_low + band_width * 0.2  # 20% from bottom
+            upper_zone = bb_high - band_width * 0.2  # 20% from top
+            
+            if close <= lower_zone:
+                bb_dir = "weak_buy"
+            elif close >= upper_zone:
+                bb_dir = "weak_sell"
+            elif close < bb_mid:
+                bb_dir = "weak_buy" if rsi_val < 50 else "neutral"
+            elif close > bb_mid:
+                bb_dir = "weak_sell" if rsi_val > 50 else "neutral"
     
     # Use original values for output (including NaN if present)
     bb_low_out = float(ind["bb_low"].iloc[-1]) if bb_low is not None else np.nan
@@ -264,7 +318,7 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     close_out = float(last["close"]) if close is not None else np.nan
     results["BBANDS"] = IndicatorResult(bb_dir, {"bb_low": bb_low_out, "bb_high": bb_high_out, "close": close_out}, 0)
 
-    # Stochastic cross
+    # Enhanced Stochastic cross with zone-based signals
     k = safe_float(ind["stoch_k"].iloc[-1])
     d = safe_float(ind["stoch_d"].iloc[-1])
     k_prev = safe_float(ind["stoch_k"].iloc[-2])
@@ -272,17 +326,32 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     st_dir: Direction = "neutral"
     
     if all(v is not None for v in [k, d, k_prev, d_prev]):
+        # Traditional crossover signals (strong)
         if _cross_over(k_prev, d_prev, k, d) and k < params["STOCH"]["oversold"]:
             st_dir = "buy"
         elif _cross_under(k_prev, d_prev, k, d) and k > params["STOCH"]["overbought"]:
             st_dir = "sell"
+        # Enhanced: zone-based soft signals
+        else:
+            if k <= 20 and d <= 20:  # Deep oversold
+                st_dir = "buy"
+            elif k <= 30 and d <= 30:  # Oversold zone
+                st_dir = "weak_buy"
+            elif k >= 80 and d >= 80:  # Deep overbought
+                st_dir = "sell"
+            elif k >= 70 and d >= 70:  # Overbought zone
+                st_dir = "weak_sell"
+            elif k > d and k < 50:  # Bullish momentum in lower half
+                st_dir = "weak_buy"
+            elif k < d and k > 50:  # Bearish momentum in upper half
+                st_dir = "weak_sell"
     
     # Use original values for output (including NaN if present)
     k_out = float(ind["stoch_k"].iloc[-1]) if k is not None else np.nan
     d_out = float(ind["stoch_d"].iloc[-1]) if d is not None else np.nan
     results["STOCH"] = IndicatorResult(st_dir, {"k": k_out, "d": d_out}, 0)
 
-    # ATR filter
+    # ATR filter (unchanged)
     atr = safe_float(ind["atr"].iloc[-1])
     atr_dir: Direction = "neutral"
     atr_ratio = 0.0
@@ -299,126 +368,122 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     return results
 
 
-def _get_indicator_contribution(weight: float, is_aligned: bool, is_neutral: bool) -> float:
-    """Calculate indicator contribution with partial credit for neutral indicators."""
-    if is_aligned:
-        return weight
-    elif is_neutral:
-        return weight * NEUTRAL_WEIGHT_FACTOR
+def _get_indicator_contribution(weight: float, direction: Direction, target_direction: Direction, weak_signal_factor: float = 0.5) -> float:
+    """Calculate indicator contribution with weighted bias logic for soft directional weights."""
+    if direction == target_direction:
+        return weight  # Full weight for strong signals
+    elif direction == f"weak_{target_direction}":
+        return weight * weak_signal_factor  # Partial weight for weak signals
+    elif direction == "neutral":
+        return weight * NEUTRAL_WEIGHT_FACTOR  # Partial credit for neutral
     else:
-        return 0.0
+        return 0.0  # No contribution for opposing signals
 
+def _calculate_weighted_bias_score(results: Dict[str, IndicatorResult], weights: Dict[str, float], indicators: list) -> tuple[float, float]:
+    """Calculate weighted bias scores for buy and sell directions."""
+    buy_weight_sum = 0.0
+    sell_weight_sum = 0.0
+    
+    for indicator in indicators:
+        if indicator not in results:
+            continue
+            
+        direction = results[indicator].direction
+        weight = weights.get(indicator, 0.0)
+        
+        if direction == "buy":
+            buy_weight_sum += weight
+        elif direction == "sell":
+            sell_weight_sum += weight
+        elif direction == "weak_buy":
+            buy_weight_sum += weight * 0.5
+        elif direction == "weak_sell":
+            sell_weight_sum += weight * 0.5
+        elif direction == "neutral":
+            # Neutral contributes small amount to both sides
+            neutral_contrib = weight * NEUTRAL_WEIGHT_FACTOR * 0.5
+            buy_weight_sum += neutral_contrib
+            sell_weight_sum += neutral_contrib
+    
+    return buy_weight_sum, sell_weight_sum
 
-def _strength(direction: Direction, contributions: Dict[str, float]) -> float:
-    return sum(v for k, v in contributions.items()) if direction in ("buy", "sell") else 0.0
-
+def _determine_direction_from_bias(buy_weight: float, sell_weight: float, total_weight: float, dynamic_threshold: bool = True) -> tuple[Direction, float]:
+    """Determine direction and strength from weighted bias scores with dynamic thresholds."""
+    bias_score = buy_weight - sell_weight
+    
+    # Dynamic threshold based on total weight (10% by default)
+    if dynamic_threshold:
+        threshold = total_weight * 0.1
+    else:
+        threshold = total_weight * 0.05  # Fixed 5% threshold
+    
+    # Determine direction
+    if abs(bias_score) < threshold:
+        direction = "neutral"
+        strength = 0.0
+    else:
+        direction = "buy" if bias_score > 0 else "sell"
+        # Normalize strength to 0-100% based on maximum possible bias
+        max_possible_bias = total_weight
+        strength = min(100.0, (abs(bias_score) / max_possible_bias) * 100.0) if max_possible_bias > 0 else 0.0
+    
+    return direction, strength
 
 def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict[str, float] | None = None) -> Dict[str, Dict]:
     weights = weights or WEIGHTS
-
-    # Build contributions for each strategy
-    # Trend: SMA/EMA cross + MACD + ATR
-    trend_dir: Direction = "neutral"
-    # Decide direction via majority among SMA, EMA, MACD (ignore ATR for direction)
-    dirs = [results["SMA"].direction, results["EMA"].direction, results["MACD"].direction]
-    buys = dirs.count("buy")
-    sells = dirs.count("sell")
-    if buys > sells and buys > 0:
-        trend_dir = "buy"
-    elif sells > buys and sells > 0:
-        trend_dir = "sell"
-
+    
+    # Enhanced weighted bias logic for trend strategy
+    trend_indicators = ["SMA", "EMA", "MACD"]
+    trend_buy_weight, trend_sell_weight = _calculate_weighted_bias_score(results, weights, trend_indicators)
+    
+    # Add ATR stability bonus if conditions are met
+    atr_weight = weights.get("ATR_STABILITY", weights.get("ATR", 0))
+    if results["ATR"].direction == "buy":  # ATR filter passed
+        trend_buy_weight += atr_weight
+        trend_sell_weight += atr_weight
+    
+    trend_total_weight = sum(weights.get(ind, 0) for ind in trend_indicators) + atr_weight
+    trend_dir, trend_strength = _determine_direction_from_bias(trend_buy_weight, trend_sell_weight, trend_total_weight)
+    
+    # Enhanced weighted bias logic for momentum strategy  
+    momentum_indicators = ["RSI", "STOCH", "BBANDS"]
+    momentum_buy_weight, momentum_sell_weight = _calculate_weighted_bias_score(results, weights, momentum_indicators)
+    momentum_total_weight = sum(weights.get(ind, 0) for ind in momentum_indicators)
+    momentum_dir, momentum_strength = _determine_direction_from_bias(momentum_buy_weight, momentum_sell_weight, momentum_total_weight)
+    
+    # Enhanced weighted bias logic for combined strategy
+    combined_indicators = ["RSI", "MACD", "SMA", "EMA", "BBANDS", "STOCH"]
+    combined_buy_weight, combined_sell_weight = _calculate_weighted_bias_score(results, weights, combined_indicators)
+    
+    # Add ATR stability bonus for combined
+    if results["ATR"].direction == "buy":
+        combined_buy_weight += atr_weight
+        combined_sell_weight += atr_weight
+    
+    combined_total_weight = sum(weights.get(ind, 0) for ind in combined_indicators) + atr_weight
+    combined_dir, combined_strength = _determine_direction_from_bias(combined_buy_weight, combined_sell_weight, combined_total_weight)
+    
+    # Build detailed contribution tracking for backward compatibility
     trend_contrib = {
-        "SMA_EMA": _get_indicator_contribution(
-            weights["SMA_EMA"], 
-            results["SMA"].direction == trend_dir and results["EMA"].direction == trend_dir,
-            results["SMA"].direction == "neutral" or results["EMA"].direction == "neutral"
-        ),
-        "MACD": _get_indicator_contribution(
-            weights["MACD"], 
-            results["MACD"].direction == trend_dir,
-            results["MACD"].direction == "neutral"
-        ),
-        "ATR_STABILITY": (weights.get("ATR_STABILITY", weights.get("ATR", 0)) if results["ATR"].direction == "buy" else 0),  # ATR acts as filter; contributes when OK
+        "SMA_EMA": weights.get("SMA_EMA", 0) if (results["SMA"].direction == trend_dir or results["EMA"].direction == trend_dir) else 0,
+        "MACD": weights.get("MACD", 0) if results["MACD"].direction == trend_dir else 0,
+        "ATR_STABILITY": atr_weight if results["ATR"].direction == "buy" else 0,
     }
-    trend_strength = _strength(trend_dir, trend_contrib)
-
-    # Momentum: RSI + Stochastic + Bollinger
-    momentum_dir: Direction = "neutral"
-    dirs_m = [results["RSI"].direction, results["STOCH"].direction, results["BBANDS"].direction]
-    buys_m = dirs_m.count("buy")
-    sells_m = dirs_m.count("sell")
-    if buys_m > sells_m and buys_m > 0:
-        momentum_dir = "buy"
-    elif sells_m > buys_m and sells_m > 0:
-        momentum_dir = "sell"
-
+    
     momentum_contrib = {
-        "RSI": _get_indicator_contribution(
-            weights["RSI"], 
-            results["RSI"].direction == momentum_dir,
-            results["RSI"].direction == "neutral"
-        ),
-        "STOCH": _get_indicator_contribution(
-            weights["STOCH"], 
-            results["STOCH"].direction == momentum_dir,
-            results["STOCH"].direction == "neutral"
-        ),
-        "BBANDS": _get_indicator_contribution(
-            weights["BBANDS"], 
-            results["BBANDS"].direction == momentum_dir,
-            results["BBANDS"].direction == "neutral"
-        ),
+        "RSI": weights.get("RSI", 0) if results["RSI"].direction == momentum_dir else 0,
+        "STOCH": weights.get("STOCH", 0) if results["STOCH"].direction == momentum_dir else 0,
+        "BBANDS": weights.get("BBANDS", 0) if results["BBANDS"].direction == momentum_dir else 0,
     }
-    momentum_strength = _strength(momentum_dir, momentum_contrib)
-
-    # Combined: all indicators together
-    # Direction by majority among all (excluding ATR)
-    all_dirs = [
-        results["RSI"].direction,
-        results["MACD"].direction,
-        results["SMA"].direction,
-        results["EMA"].direction,
-        results["BBANDS"].direction,
-        results["STOCH"].direction,
-    ]
-    buys_c = all_dirs.count("buy")
-    sells_c = all_dirs.count("sell")
-    combined_dir: Direction = "neutral"
-    if buys_c > sells_c and buys_c > 0:
-        combined_dir = "buy"
-    elif sells_c > buys_c and sells_c > 0:
-        combined_dir = "sell"
-
+    
     combined_contrib = {
-        "RSI": _get_indicator_contribution(
-            weights["RSI"], 
-            results["RSI"].direction == combined_dir,
-            results["RSI"].direction == "neutral"
-        ),
-        "MACD": _get_indicator_contribution(
-            weights["MACD"], 
-            results["MACD"].direction == combined_dir,
-            results["MACD"].direction == "neutral"
-        ),
-        "SMA_EMA": _get_indicator_contribution(
-            weights["SMA_EMA"], 
-            results["SMA"].direction == combined_dir and results["EMA"].direction == combined_dir,
-            results["SMA"].direction == "neutral" or results["EMA"].direction == "neutral"
-        ),
-        "BBANDS": _get_indicator_contribution(
-            weights["BBANDS"], 
-            results["BBANDS"].direction == combined_dir,
-            results["BBANDS"].direction == "neutral"
-        ),
-        "STOCH": _get_indicator_contribution(
-            weights["STOCH"], 
-            results["STOCH"].direction == combined_dir,
-            results["STOCH"].direction == "neutral"
-        ),
-        "ATR_STABILITY": (weights.get("ATR_STABILITY", weights.get("ATR", 0)) if results["ATR"].direction == "buy" else 0),
+        "RSI": weights.get("RSI", 0) if results["RSI"].direction == combined_dir else 0,
+        "MACD": weights.get("MACD", 0) if results["MACD"].direction == combined_dir else 0,
+        "SMA_EMA": weights.get("SMA_EMA", 0) if (results["SMA"].direction == combined_dir or results["EMA"].direction == combined_dir) else 0,
+        "BBANDS": weights.get("BBANDS", 0) if results["BBANDS"].direction == combined_dir else 0,
+        "STOCH": weights.get("STOCH", 0) if results["STOCH"].direction == combined_dir else 0,
+        "ATR_STABILITY": atr_weight if results["ATR"].direction == "buy" else 0,
     }
-    combined_strength = _strength(combined_dir, combined_contrib)
 
     return {
         "trend": {"direction": trend_dir, "strength": trend_strength, "contributions": trend_contrib},

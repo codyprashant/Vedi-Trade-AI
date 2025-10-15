@@ -23,7 +23,7 @@ from .indicators import (
 )
 from .db import (
     ensure_signals_table,
-    ensure_backtesting_tables,
+
     ensure_strategy_tables,
     create_default_gold_strategy_if_missing,
     fetch_recent_signals,
@@ -31,10 +31,9 @@ from .db import (
     fetch_latest_signal_by_symbol,
     ensure_indicator_snapshots_table,
     fetch_latest_indicator_snapshots,
-    insert_backtesting_signals_batch,
-    insert_backtesting_run,
-    fetch_backtesting_runs,
-    fetch_backtesting_signals_by_run,
+    fetch_backtest_summary,
+    fetch_backtest_signals,
+    fetch_all_backtests,
     get_strategies,
     get_strategy_details,
     update_indicator_params,
@@ -610,274 +609,158 @@ class UpdateScheduleRequest(BaseModel):
 class UpdateThresholdRequest(BaseModel):
     signal_threshold: float
 
-# --- Backtesting models ---
-class ManualBacktestRequest(BaseModel):
-    symbol: str
-    timeframe: str | None = None
-    start_date: str
-    end_date: str
-    manual_run_id: str | None = None
-    source_mode: str | None = None  # 'csv' or 'yahoo'
+# Legacy backtesting endpoints removed - use unified BacktestEngine via /api/backtest/* endpoints
 
 
-@app.post("/api/backtest/manual/generate")
-async def backtest_manual_generate(req: ManualBacktestRequest):
-    """
-    Generate backtesting signals using Yahoo Finance OHLCV and the current indicator/strategy config.
+# --- New Unified Backtesting Endpoints ---
 
-    - Computes signals on the requested `timeframe` (defaults to configured primary timeframe).
-    - Aligns with H1 confirmation and H4 trend to compute final confidence and trade plan.
-    - Persists signals and run metadata to Postgres backtesting tables.
-    """
+@app.post("/api/backtest/run")
+async def run_backtest(
+    strategy_id: int,
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    investment: float = 10000,
+    timeframe: str = "15m"
+):
+    """Run a new backtest using the unified BacktestEngine."""
     try:
-        primary_tf = req.timeframe or PRIMARY_TIMEFRAME
-        confirmation_tf = CONFIRMATION_TIMEFRAME
-        trend_tf = TREND_TIMEFRAME
-
-        use_csv = (req.source_mode or "").lower() == "csv"
-        if use_csv:
-            # Load primary timeframe from CSV; derive H1/H4 by resampling if needed
-            df = fetch_range_df_csv(req.symbol, primary_tf, req.start_date, req.end_date)
-            # Derive H1/H4
-            # Map timeframe to pandas resample rule
-            tf_rules = {
-                "1m": "1T", "5m": "5T", "15m": "15T", "30m": "30T",
-                "1h": "1H", "h1": "1H", "4h": "4H", "h4": "4H", "1d": "1D"
-            }
-            # Confirmation: 1H
-            if primary_tf.lower() in ("1h", "h1"):
-                h1_df = df.copy()
-            else:
-                h1_df = resample_ohlcv(df, "1H")
-            # Trend: 4H
-            if primary_tf.lower() in ("4h", "h4"):
-                h4_df = df.copy()
-            else:
-                # If we already have h1_df, prefer resampling from it
-                base_for_h4 = h1_df if len(h1_df) > 0 else df
-                h4_df = resample_ohlcv(base_for_h4, "4H")
-        else:
-            # Fetch primary + higher timeframes from Yahoo
-            df = fetch_range_df(req.symbol, primary_tf, req.start_date, req.end_date)
-            h1_df = fetch_range_df(req.symbol, confirmation_tf, req.start_date, req.end_date)
-            h4_df = fetch_range_df(req.symbol, trend_tf, req.start_date, req.end_date)
-
-        if len(df) < 3:
-            raise HTTPException(status_code=400, detail="Insufficient data for backtesting range")
-
-        records: list[dict] = []
-        strengths: list[float] = []
-        rrs: list[float] = []
-
-        # Iterate candles; compute indicators per step to ensure correct previous values
-        for i in range(1, len(df)):
-            df_i = df.iloc[: i + 1]
-            # Compute indicators for the current slice
-            ind = compute_indicators(df_i, INDICATOR_PARAMS)
-            # Validate last two values exist for all needed series
-            needed = [
-                "rsi",
-                "macd",
-                "macd_signal",
-                "sma_short",
-                "sma_long",
-                "ema_short",
-                "ema_long",
-                "bb_low",
-                "bb_high",
-                "stoch_k",
-                "stoch_d",
-                "atr",
-            ]
-            if any(len(ind[n]) < 2 or pd.isna(ind[n].iloc[-1]) or pd.isna(ind[n].iloc[-2]) for n in needed):
-                continue
-
-            # Evaluate and compute strategy strength
-            res = evaluate_signals(df_i, ind, INDICATOR_PARAMS)
-            strat = compute_strategy_strength(res, WEIGHTS)
-            best = best_signal(strat)
-            if not best or best["direction"] not in ("buy", "sell"):
-                continue
-
-            ts = pd.to_datetime(df_i.iloc[-1]["time"]).isoformat()
-
-            # Find corresponding higher timeframe slices up to ts
-            h1_slice = h1_df[h1_df["time"] <= df_i.iloc[-1]["time"]]
-            h4_slice = h4_df[h4_df["time"] <= df_i.iloc[-1]["time"]]
-            if len(h1_slice) < 5 or len(h4_slice) < 5:
-                # Need at least a few points to compute EMA/ATR reliably
-                continue
-
-            h1_dir = ema_trend_direction(h1_slice, short_len=50, long_len=200)
-            h1_atr_last, h1_atr_mean50 = atr_last_and_mean(
-                h1_slice,
-                length=INDICATOR_PARAMS.get("ATR", {}).get("length", 14),
-                mean_window=50,
-                params=INDICATOR_PARAMS,
-            )
-            h4_dir = ema_trend_direction(h4_slice, short_len=50, long_len=200)
-
-            # Alignment validation and volatility checks
-            m15_side = best["direction"]
-            h1_is_bull = h1_dir == "Bullish"
-            aligns_h1 = (m15_side == "buy" and h1_is_bull) or (m15_side == "sell" and not h1_is_bull)
-            if not aligns_h1:
-                continue
-
-            extreme_vol = float(h1_atr_last) > (3.0 * float(h1_atr_mean50))
-            if extreme_vol:
-                continue
-
-            if float(h1_atr_last) > 1.2 * float(h1_atr_mean50):
-                volatility_state = "High"
-                rr = 1.2
-                sl_mult = 2.0
-            elif float(h1_atr_last) < 0.8 * float(h1_atr_mean50):
-                volatility_state = "Low"
-                rr = 1.8
-                sl_mult = 1.0
-            else:
-                volatility_state = "Normal"
-                rr = 1.5
-                sl_mult = 1.5
-
-            # Trade plan
-            close_m15 = float(df_i.iloc[-1]["close"])  # last close on primary TF
-            entry_offset = 0.1 * float(h1_atr_last)
-            entry_price = close_m15 - entry_offset if m15_side == "buy" else close_m15 + entry_offset
-
-            sl_distance = sl_mult * float(h1_atr_last)
-            min_sl = 0.0025 * close_m15
-            max_sl = 0.0120 * close_m15
-            if sl_distance < min_sl:
-                sl_distance = min_sl
-            elif sl_distance > max_sl:
-                sl_distance = max_sl
-
-            tp_distance = rr * sl_distance
-            min_tp = 0.0040 * close_m15
-            max_tp = 0.0200 * close_m15
-            if tp_distance < min_tp:
-                tp_distance = min_tp
-            elif tp_distance > max_tp:
-                tp_distance = max_tp
-
-            stop_loss_price = entry_price - sl_distance if m15_side == "buy" else entry_price + sl_distance
-            take_profit_price = entry_price + tp_distance if m15_side == "buy" else entry_price - tp_distance
-
-            # Pips conversion assumption: XAUUSD pip = 0.01
-            pip_value = 0.01
-            sl_pips = sl_distance / pip_value
-            tp_pips = tp_distance / pip_value
-
-            # Multiplicative alignment boost
-            alignment_multiplier = 1.1 if h4_dir == h1_dir else 0.9
-            pa_dir = price_action_direction(df_i, lookback=5, params=INDICATOR_PARAMS)
-
-            contrib_new = {
-                "RSI": (WEIGHTS.get("RSI", 0) if res["RSI"].direction == m15_side else 0),
-                "MACD": (WEIGHTS.get("MACD", 0) if res["MACD"].direction == m15_side else 0),
-                "STOCH": (WEIGHTS.get("STOCH", 0) if res["STOCH"].direction == m15_side else 0),
-                "BBANDS": (WEIGHTS.get("BBANDS", 0) if res["BBANDS"].direction == m15_side else 0),
-                "SMA_EMA": (
-                    WEIGHTS.get("SMA_EMA", 0)
-                    if (res["SMA"].direction == m15_side and res["EMA"].direction == m15_side)
-                    else 0
-                ),
-                "MTF": (WEIGHTS.get("MTF", 0) if aligns_h1 else 0),
-                "ATR_STABILITY": (WEIGHTS.get("ATR_STABILITY", 0) if volatility_state == "Normal" else 0),
-                "PRICE_ACTION": (WEIGHTS.get("PRICE_ACTION", 0) if pa_dir == m15_side else 0),
-            }
-            base_strength = float(sum(contrib_new.values()))
-            final_strength = min(100.0, base_strength * alignment_multiplier)
-            alignment_boost = final_strength - base_strength  # For logging compatibility
-
-            if final_strength >= float(SIGNAL_THRESHOLD):
-                records.append(
-                    {
-                        "manual_run_id": req.manual_run_id or f"run_{req.symbol}_{primary_tf}_{pd.Timestamp.utcnow().strftime('%Y%m%d%H%M%S')}",
-                        "timestamp": ts,
-                        "symbol": req.symbol,
-                        "signal_type": m15_side.upper(),
-                        "entry_price": entry_price,
-                        "stop_loss_price": stop_loss_price,
-                        "take_profit_price": take_profit_price,
-                        "final_signal_strength": final_strength,
-                        "volatility_state": volatility_state,
-                        "risk_reward_ratio": rr,
-                        "indicator_contributions": contrib_new,
-                        "source_mode": "yahoo_backtest",
-                    }
-                )
-                strengths.append(final_strength)
-                rrs.append(rr)
-
-        if not records:
-            # Still insert a run with zero signals for traceability
-            run_id = req.manual_run_id or f"run_{req.symbol}_{primary_tf}_{pd.Timestamp.utcnow().strftime('%Y%m%d%H%M%S')}"
-            insert_backtesting_run(
-                {
-                    "manual_run_id": run_id,
-                    "start_date": pd.to_datetime(req.start_date).isoformat(),
-                    "end_date": pd.to_datetime(req.end_date).isoformat(),
-                    "symbol": req.symbol,
-                    "timeframe": primary_tf,
-                    "signals_generated": 0,
-                    "average_confidence": None,
-                    "average_rr_ratio": None,
-                    "run_duration_seconds": 0.0,
-                    "status": "completed",
-                    "created_at": pd.Timestamp.utcnow().isoformat(),
-                }
-            )
-            return {"manual_run_id": run_id, "signals_generated": 0}
-
-        # Persist signals and run meta
-        run_id = records[0]["manual_run_id"]
-        insert_backtesting_signals_batch(records)
-        insert_backtesting_run(
-            {
-                "manual_run_id": run_id,
-                "start_date": pd.to_datetime(req.start_date).isoformat(),
-                "end_date": pd.to_datetime(req.end_date).isoformat(),
-                "symbol": req.symbol,
-                "timeframe": primary_tf,
-                "signals_generated": len(records),
-                "average_confidence": float(sum(strengths) / len(strengths)) if strengths else None,
-                "average_rr_ratio": float(sum(rrs) / len(rrs)) if rrs else None,
-                "run_duration_seconds": 0.0,
-                "status": "completed",
-                "created_at": pd.Timestamp.utcnow().isoformat(),
-            }
+        from backtest.backtest_engine import BacktestEngine
+        
+        engine = BacktestEngine(
+            strategy_id=strategy_id,
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            investment=investment,
+            timeframe=timeframe
         )
+        
+        summary = engine.run_backtest()
+        return {"success": True, "backtest": summary}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Backtest execution failed: {e}")
+
+
+@app.get("/api/backtest/roi")
+async def calculate_roi(backtest_id: int, amount: float):
+    """Calculate ROI projection for a specific backtest and investment amount."""
+    try:
+        # Fetch backtest summary
+        backtest = fetch_backtest_summary(backtest_id)
+        if not backtest:
+            raise HTTPException(status_code=404, detail="Backtest not found")
+        
+        # Calculate ROI
+        total_return_pct = backtest['total_return_pct']
+        roi_amount = amount * (1 + total_return_pct / 100)
+        
         return {
-            "manual_run_id": run_id,
-            "signals_generated": len(records),
-            "average_confidence": float(sum(strengths) / len(strengths)) if strengths else None,
-            "average_rr_ratio": float(sum(rrs) / len(rrs)) if rrs else None,
+            "backtest_id": backtest_id,
+            "initial": amount,
+            "final": roi_amount,
+            "return_pct": total_return_pct,
+            "profit": roi_amount - amount,
+            "symbol": backtest['symbol'],
+            "timeframe": backtest['timeframe'],
+            "efficiency_pct": backtest['efficiency_pct']
         }
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Backtesting failed: {e}")
+        raise HTTPException(status_code=500, detail=f"ROI calculation failed: {e}")
 
 
-@app.get("/api/backtest/manual/runs")
-async def backtest_runs(from_date: str | None = None, to_date: str | None = None, symbol: str | None = None, min_signal_strength: float | None = None):
+@app.get("/api/backtest/{backtest_id}/results")
+async def get_backtest_results(backtest_id: int):
+    """Get detailed backtest results including summary and all signals."""
     try:
-        rows = fetch_backtesting_runs(from_date=from_date, to_date=to_date, symbol=symbol, min_signal_strength=min_signal_strength)
-        return {"count": len(rows), "runs": rows}
+        # Fetch backtest summary
+        backtest = fetch_backtest_summary(backtest_id)
+        if not backtest:
+            raise HTTPException(status_code=404, detail="Backtest not found")
+        
+        # Fetch all signals for this backtest
+        signals = fetch_backtest_signals(backtest_id)
+        
+        # Calculate additional metrics
+        win_signals = [s for s in signals if s['result'] == 'profit']
+        loss_signals = [s for s in signals if s['result'] == 'loss']
+        open_signals = [s for s in signals if s['result'] == 'open']
+        
+        # Format signals for response
+        formatted_signals = []
+        for signal in signals:
+            formatted_signals.append({
+                "time": signal['signal_time'].isoformat() if signal['signal_time'] else None,
+                "direction": signal['direction'],
+                "entry_price": signal['entry_price'],
+                "exit_price": signal['exit_price'],
+                "profit_pct": signal['profit_pct'],
+                "result": signal['result'],
+                "confidence": signal['confidence'],
+                "reason": signal['reason']
+            })
+        
+        return {
+            "summary": {
+                "backtest_id": backtest_id,
+                "symbol": backtest['symbol'],
+                "timeframe": backtest['timeframe'],
+                "start_date": backtest['start_date'].isoformat() if backtest['start_date'] else None,
+                "end_date": backtest['end_date'].isoformat() if backtest['end_date'] else None,
+                "investment": backtest['investment'],
+                "total_return_pct": backtest['total_return_pct'],
+                "efficiency_pct": backtest['efficiency_pct'],
+                "total_signals": len(signals),
+                "win_count": len(win_signals),
+                "loss_count": len(loss_signals),
+                "open_count": len(open_signals),
+                "created_at": backtest['created_at'].isoformat() if backtest['created_at'] else None
+            },
+            "signals": formatted_signals
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch backtesting runs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch backtest results: {e}")
 
 
-@app.get("/api/backtest/manual/signals")
-async def backtest_signals(manual_run_id: str):
+@app.get("/api/backtest/list")
+async def list_backtests(symbol: str = None, limit: int = 50):
+    """List all backtests with optional filtering."""
     try:
-        rows = fetch_backtesting_signals_by_run(manual_run_id)
-        return {"count": len(rows), "signals": rows}
+        backtests = fetch_all_backtests(symbol=symbol, limit=limit)
+        
+        # Format response
+        formatted_backtests = []
+        for bt in backtests:
+            formatted_backtests.append({
+                "id": bt['id'],
+                "symbol": bt['symbol'],
+                "timeframe": bt['timeframe'],
+                "start_date": bt['start_date'].isoformat() if bt['start_date'] else None,
+                "end_date": bt['end_date'].isoformat() if bt['end_date'] else None,
+                "investment": bt['investment'],
+                "total_return_pct": bt['total_return_pct'],
+                "efficiency_pct": bt['efficiency_pct'],
+                "total_signals": bt.get('total_signals', 0),
+                "win_count": bt.get('win_count', 0),
+                "loss_count": bt.get('loss_count', 0),
+                "open_count": bt.get('open_count', 0),
+                "created_at": bt['created_at'].isoformat() if bt['created_at'] else None
+            })
+        
+        return {
+            "count": len(formatted_backtests),
+            "backtests": formatted_backtests
+        }
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch backtesting signals: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch backtests: {e}")
 
 
 @app.websocket("/ws/prices")
@@ -985,7 +868,7 @@ async def init_env_and_start_signal_engine():
     except Exception as e:
         print(f"Postgres init failed (signals): {e}")
     try:
-        ensure_backtesting_tables()
+    
     except Exception as e:
         print(f"Postgres init failed (backtesting): {e}")
     try:

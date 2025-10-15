@@ -1,6 +1,6 @@
 # Backtesting CSV Data
 
-Place historical OHLCV CSV files here for manual backtests.
+Place historical OHLCV CSV files here for unified BacktestEngine backtests.
 
 ## File naming
 

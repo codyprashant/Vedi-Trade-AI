@@ -70,9 +70,10 @@ Base URL: `http://localhost:8001`
 - `POST /api/config/strategies/{id}/activate` — activate a trading strategy.
 
 ### Backtesting
-- `POST /api/backtest/manual/generate` — generate historical signals.
-- `GET /api/backtest/manual/runs` — list backtesting runs.
-- `GET /api/backtest/manual/signals/{run_id}` — get signals for specific run.
+- `POST /api/backtest/run` — run unified backtest with strategy.
+- `GET /api/backtest/roi` — calculate ROI for backtest results.
+- `GET /api/backtest/{backtest_id}/results` — get detailed backtest results.
+- `GET /api/backtest/list` — list all backtests.
 
 ### Documentation
 - `GET /openapi.json` — live OpenAPI spec.
