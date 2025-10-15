@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from .env_loader import load_dotenv_file
 from .signal_engine import SignalEngine
+from .utils_time import retry, last_closed
 from .indicators import (
     compute_indicators,
     evaluate_signals,
@@ -41,6 +42,7 @@ from .db import (
     update_strategy_schedule,
     update_strategy_threshold,
     set_active_strategy,
+    check_database_health,
 )
 from .config import (
     ALLOWED_SYMBOLS,
@@ -68,6 +70,21 @@ app = FastAPI(
     description="Stream prices via WebSocket and fetch OHLCV using Yahoo Finance.",
     version="0.1.0",
 )
+
+
+# --- Helper: map app timeframe to pandas frequency string for flooring ---
+def _freq_for_timeframe(tf: str) -> str:
+    tf = tf.strip().lower()
+    if tf in ("15m", "15min", "m15"):
+        return "15min"
+    if tf in ("1h", "60m", "h1", "1hour"):
+        return "1h"
+    if tf in ("4h", "h4", "240m", "4hour"):
+        return "4h"
+    if tf in ("1d", "d1", "1day"):
+        return "1d"
+    # Default to minutes if unspecified
+    return "15min"
 
 
 # --- CORS configuration (allow_origins from .env via CORS_ALLOW_ORIGINS) ---
@@ -308,7 +325,7 @@ async def poll_loop():
                 # Fallback to latest 1m candle close
                 if bid is None:
                     try:
-                        hist = ticker.history(period="1d", interval="1m")
+                        hist = retry(lambda: ticker.history(period="1d", interval="1m"))
                         if hist is not None and not hist.empty:
                             row = hist.tail(1)
                             bid = float(row["Close"].iloc[0])
@@ -333,6 +350,22 @@ async def poll_loop():
                     
                     # Fetch recent history and compute indicators
                     df = fetch_history_df(symbol, timeframe, max(100, count))
+                    # Crop to last closed bar to avoid partial candle effects
+                    try:
+                        if df is not None and len(df) >= 1:
+                            freq = _freq_for_timeframe(timeframe)
+                            anchor = last_closed(pd.to_datetime(df.iloc[-1]["time"]), freq)
+                            before_len = len(df)
+                            df = df[df["time"] <= anchor]
+                            after_len = len(df)
+                            if DEBUG_WEBSOCKET:
+                                last_ts = pd.to_datetime(df.iloc[-1]["time"]).isoformat() if after_len else "<empty>"
+                                print(
+                                    f"WebSocket Debug - {symbol}: Cropped partial bars ({before_len} -> {after_len}); anchor={anchor}, last_ts={last_ts}"
+                                )
+                    except Exception as crop_err:
+                        if DEBUG_WEBSOCKET:
+                            print(f"WebSocket Debug - {symbol}: Cropping error: {crop_err}")
                     if DEBUG_WEBSOCKET:
                         print(f"WebSocket Debug - {symbol}: Fetched df: {df is not None}, len={len(df) if df is not None else 0}")
                     
@@ -444,7 +477,7 @@ async def history(symbol: str = "XAUUSD", timeframe: str = "15m", count: int = 5
 
     period = _approx_period_for_count(interval, count)
     try:
-        df = ticker.history(period=period, interval=interval)
+        df = retry(lambda: ticker.history(period=period, interval=interval))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Yahoo history fetch failed: {e}")
 
@@ -483,13 +516,13 @@ def fetch_history_df(symbol: str, timeframe: str, count: int) -> pd.DataFrame:
     y_symbol = resolve_symbol(symbol)
     ticker = yf.Ticker(y_symbol)
     period = _approx_period_for_count(interval, count)
-    df = ticker.history(period=period, interval=interval)
+    df = retry(lambda: ticker.history(period=period, interval=interval))
     # Generic fallbacks: resample from smaller intervals if native interval empty
     def try_resample(from_interval: str, rule: str, mult: int) -> Optional[pd.DataFrame]:
         try:
             alt_count = max(count * mult, 200)
             alt_period = _approx_period_for_count(from_interval, alt_count)
-            df1 = ticker.history(period=alt_period, interval=from_interval)
+            df1 = retry(lambda: ticker.history(period=alt_period, interval=from_interval))
             if df1 is None or df1.empty:
                 return None
             df1 = df1.reset_index().rename(columns={"Datetime": "time"})
@@ -529,7 +562,7 @@ def fetch_range_df(symbol: str, timeframe: str, start_ts, end_ts) -> pd.DataFram
     start_dt = pd.to_datetime(start_ts)
     end_dt = pd.to_datetime(end_ts)
     ticker = yf.Ticker(y_symbol)
-    df = ticker.history(start=start_dt.to_pydatetime(), end=end_dt.to_pydatetime(), interval=interval)
+    df = retry(lambda: ticker.history(start=start_dt.to_pydatetime(), end=end_dt.to_pydatetime(), interval=interval))
     if df is None or df.empty:
         raise RuntimeError(f"No data for {y_symbol} {timeframe} in range")
     df = df.reset_index()
@@ -1040,3 +1073,51 @@ async def activate_strategy(strategy_id: int):
         return {"message": f"Activated strategy {strategy_id}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to activate strategy: {e}")
+
+
+# --- Health Check Endpoint ---
+
+@app.get("/health")
+async def health_check():
+    """Lightweight health check endpoint for monitoring."""
+    import time
+    
+    start_time = time.time()
+    health_data = {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": None,
+        "database": None,
+        "signal_engine": None,
+        "websocket_subscribers": total_subscribers(),
+        "response_time_ms": None
+    }
+    
+    # Check database health
+    try:
+        db_health = check_database_health()
+        health_data["database"] = db_health
+        if db_health["status"] != "healthy":
+            health_data["status"] = "degraded"
+    except Exception as e:
+        health_data["database"] = {"status": "unhealthy", "error": str(e)}
+        health_data["status"] = "degraded"
+    
+    # Check signal engine status
+    try:
+        global signal_engine_instance, signal_task
+        if signal_engine_instance and signal_task and not signal_task.done():
+            health_data["signal_engine"] = {"status": "running"}
+        else:
+            health_data["signal_engine"] = {"status": "stopped"}
+            if health_data["status"] == "healthy":
+                health_data["status"] = "degraded"
+    except Exception as e:
+        health_data["signal_engine"] = {"status": "error", "error": str(e)}
+        health_data["status"] = "degraded"
+    
+    # Calculate response time
+    response_time = (time.time() - start_time) * 1000
+    health_data["response_time_ms"] = round(response_time, 2)
+    
+    return health_data

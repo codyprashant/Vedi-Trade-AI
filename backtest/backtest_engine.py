@@ -143,42 +143,124 @@ class BacktestEngine:
         """
         try:
             # Process data in chunks to simulate real-time signal generation
-            for i in range(100, len(market_data)):  # Start after enough data for indicators
+            # Stop one bar before the end to ensure we have next bar for entry price
+            for i in range(100, len(market_data) - 1):  # Start after enough data for indicators
                 # Get data slice up to current point
                 current_data = market_data.iloc[:i+1]
                 
-                # Generate signal using live engine
-                signal_result = self.signal_engine.generate_signal(
-                    symbol=self.symbol,
-                    timeframe=self.timeframe,
-                    ohlcv_data=current_data.to_dict('records')
+                # Generate signal using simplified approach for backtesting
+                signal_result = self._evaluate_signal_for_backtest(
+                    historical_data=current_data,
+                    current_timestamp=current_data.index[-1]
                 )
                 
-                if signal_result and signal_result.get('is_valid', False):
+                if signal_result and signal_result.get('direction') in ['buy', 'sell']:
+                    # Use next bar's open price for realistic entry timing
+                    next_bar = market_data.iloc[i+1]
+                    realistic_entry_price = next_bar['open']
+                    
+                    # Recalculate stop loss and take profit based on realistic entry price
+                    original_entry = signal_result['entry_price']
+                    side = signal_result['direction']
+                    
+                    # Calculate the adjustment needed for SL/TP levels
+                    entry_adjustment = realistic_entry_price - original_entry
+                    
+                    # Adjust SL and TP to maintain the same risk/reward distances
+                    adjusted_sl = signal_result.get('stop_loss_price', 0) + entry_adjustment
+                    adjusted_tp = signal_result.get('take_profit_price', 0) + entry_adjustment
+                    
                     # Add timestamp and create signal record
                     signal = {
                         'id': f"backtest_{len(self.signals)}",
-                        'timestamp': current_data.index[-1],
+                        'timestamp': current_data.index[-1],  # Signal generated at end of current bar
                         'symbol': self.symbol,
-                        'side': signal_result['side'],
-                        'entry_price': signal_result['entry_price'],
-                        'stop_loss_price': signal_result.get('stop_loss_price'),
-                        'take_profit_price': signal_result.get('take_profit_price'),
-                        'strength': signal_result.get('final_signal_strength', 0),
-                        'confidence': signal_result.get('direction_confidence', 'medium'),
-                        'reason': signal_result.get('direction_reason', ''),
+                        'side': side,
+                        'entry_price': realistic_entry_price,  # Execute at next bar open
+                        'stop_loss_price': adjusted_sl,
+                        'take_profit_price': adjusted_tp,
+                        'strength': signal_result.get('strength', 0),
+                        'confidence': signal_result.get('confidence', 'medium'),
+                        'reason': signal_result.get('reason', ''),
                         'indicators': signal_result.get('indicators', {}),
-                        'risk_reward_ratio': signal_result.get('risk_reward_ratio', 1.0)
+                        'risk_reward_ratio': signal_result.get('risk_reward_ratio', 1.0),
+                        'original_entry_price': original_entry,  # Keep for reference
+                        'entry_adjustment': entry_adjustment  # Track the adjustment made
                     }
                     
                     self.signals.append(signal)
-                    logger.debug(f"Generated signal: {signal['side']} at {signal['entry_price']}")
+                    logger.debug(f"Generated signal: {signal['side']} at {realistic_entry_price:.2f} "
+                               f"(next bar open, adjusted from {original_entry:.2f})")
             
-            logger.info(f"Generated {len(self.signals)} signals")
+            logger.info(f"Generated {len(self.signals)} signals with realistic next-bar-open timing")
             
         except Exception as e:
             logger.error(f"Signal generation failed: {e}")
             raise
+    
+    def _evaluate_signal_for_backtest(self, historical_data: pd.DataFrame, current_timestamp) -> Optional[Dict[str, Any]]:
+        """Simplified signal evaluation for backtesting purposes."""
+        try:
+            from app.indicators import compute_indicators, evaluate_signals, compute_strategy_strength, best_signal
+            from app.config import WEIGHTS, SIGNAL_THRESHOLD
+            from app.utils_time import as_utc_index
+            
+            # Ensure proper time indexing
+            historical_data = as_utc_index(historical_data)
+            
+            # Compute indicators
+            indicators = compute_indicators(historical_data)
+            
+            # Evaluate signals
+            signals = evaluate_signals(indicators)
+            
+            # Compute strategy strength
+            strength = compute_strategy_strength(signals, WEIGHTS)
+            
+            # Get best signal
+            signal_info = best_signal(signals, strength)
+            
+            if signal_info and signal_info.get('strength', 0) >= SIGNAL_THRESHOLD:
+                # Calculate entry price and levels
+                current_close = historical_data.iloc[-1]['close']
+                
+                # Simple ATR-based stop loss and take profit
+                atr_period = 14
+                if len(historical_data) >= atr_period:
+                    high_low = historical_data['high'] - historical_data['low']
+                    high_close = abs(historical_data['high'] - historical_data['close'].shift(1))
+                    low_close = abs(historical_data['low'] - historical_data['close'].shift(1))
+                    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+                    atr = true_range.rolling(window=atr_period).mean().iloc[-1]
+                else:
+                    atr = current_close * 0.02  # 2% fallback
+                
+                direction = signal_info['direction']
+                if direction == 'buy':
+                    entry_price = current_close
+                    stop_loss_price = current_close - (2 * atr)
+                    take_profit_price = current_close + (3 * atr)
+                elif direction == 'sell':
+                    entry_price = current_close
+                    stop_loss_price = current_close + (2 * atr)
+                    take_profit_price = current_close - (3 * atr)
+                else:
+                    return None
+                
+                return {
+                    'direction': direction,
+                    'entry_price': entry_price,
+                    'stop_loss_price': stop_loss_price,
+                    'take_profit_price': take_profit_price,
+                    'confidence': signal_info.get('confidence', 0),
+                    'strength': signal_info.get('strength', 0)
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in signal evaluation: {e}")
+            return None
     
     def simulate_trade(self, signal: Dict[str, Any], data) -> Tuple[str, float]:
         """

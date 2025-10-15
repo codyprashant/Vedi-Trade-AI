@@ -40,21 +40,47 @@ def get_pool() -> SimpleConnectionPool:
     if not all([user, password, host, port, dbname]):
         raise RuntimeError("Database credentials missing. Ensure .env has user, password, host, port, dbname")
 
+    # Enhanced DSN with comprehensive timeout and connection settings
     dsn = (
-        f"user={user} password={password} host={host} port={port} dbname={dbname} sslmode=require connect_timeout=5"
+        f"user={user} password={password} host={host} port={port} dbname={dbname} "
+        f"sslmode=require connect_timeout=10 keepalives_idle=600 keepalives_interval=30 keepalives_count=3"
     )
-    _pool = SimpleConnectionPool(minconn=1, maxconn=5, dsn=dsn)
-    return _pool
+    
+    try:
+        _pool = SimpleConnectionPool(minconn=2, maxconn=10, dsn=dsn)
+        return _pool
+    except Exception as e:
+        raise RuntimeError(f"Failed to create database connection pool: {e}")
 
 
 def _get_conn():
+    """Get a database connection from the pool with timeout handling."""
     pool = get_pool()
-    return pool.getconn()
+    try:
+        conn = pool.getconn()
+        if conn is None:
+            raise RuntimeError("Failed to get database connection from pool")
+        return conn
+    except Exception as e:
+        raise RuntimeError(f"Database connection error: {e}")
 
 
 def _put_conn(conn):
+    """Return a database connection to the pool with error handling."""
+    if conn is None:
+        return
+    
     pool = get_pool()
-    pool.putconn(conn)
+    try:
+        # Check if connection is still valid before returning to pool
+        if conn.closed == 0:
+            pool.putconn(conn)
+        else:
+            # Connection is closed, don't return to pool
+            pass
+    except Exception as e:
+        # Log error but don't raise to avoid masking original exceptions
+        print(f"Warning: Error returning connection to pool: {e}")
 
 
 def ensure_signals_table() -> None:
@@ -455,10 +481,14 @@ def set_active_strategy(strategy_id: int) -> None:
 
 
 def insert_signal(record: Dict[str, Any]) -> None:
+    """Insert a single signal record with enhanced error handling and timeout protection."""
     conn = _get_conn()
     try:
         with conn:
             with conn.cursor() as cur:
+                # Set statement timeout for this operation
+                cur.execute("SET statement_timeout = '30s'")
+                
                 cur.execute(
                     """
                     insert into public.signals (
@@ -511,6 +541,84 @@ def insert_signal(record: Dict[str, Any]) -> None:
                         record.get("direction_reason"),
                     ),
                 )
+    except psycopg2.OperationalError as e:
+        raise RuntimeError(f"Database operational error during signal insert: {e}")
+    except psycopg2.IntegrityError as e:
+        raise RuntimeError(f"Database integrity error during signal insert: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error during signal insert: {e}")
+    finally:
+        _put_conn(conn)
+
+
+def insert_signals_batch(records: List[Dict[str, Any]]) -> None:
+    """Insert multiple signal records efficiently using execute_values."""
+    if not records:
+        return
+    
+    conn = _get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                # Set statement timeout for batch operation
+                cur.execute("SET statement_timeout = '60s'")
+                
+                # Prepare the insert query
+                insert_query = """
+                    insert into public.signals (
+                        timestamp, symbol, timeframe, side, strength, strategy, indicators, contributions,
+                        indicator_contributions, signal_type,
+                        primary_timeframe, confirmation_timeframe, trend_timeframe,
+                        h1_trend_direction, h4_trend_direction, alignment_boost, final_signal_strength,
+                        entry_price, stop_loss_price, take_profit_price,
+                        stop_loss_distance_pips, take_profit_distance_pips,
+                        risk_reward_ratio, volatility_state, is_valid,
+                        direction_confidence, direction_reason
+                    ) values %s
+                """
+                
+                # Prepare values for batch insert
+                values = []
+                for record in records:
+                    values.append((
+                        record["timestamp"],
+                        record["symbol"],
+                        record["timeframe"],
+                        record["side"],
+                        record["strength"],
+                        record["strategy"],
+                        Json(_sanitize_json(record["indicators"])),
+                        Json(_sanitize_json(record["contributions"])),
+                        Json(_sanitize_json(record.get("indicator_contributions"))),
+                        record.get("signal_type"),
+                        record.get("primary_timeframe"),
+                        record.get("confirmation_timeframe"),
+                        record.get("trend_timeframe"),
+                        record.get("h1_trend_direction"),
+                        record.get("h4_trend_direction"),
+                        record.get("alignment_boost"),
+                        record.get("final_signal_strength"),
+                        record.get("entry_price"),
+                        record.get("stop_loss_price"),
+                        record.get("take_profit_price"),
+                        record.get("stop_loss_distance_pips"),
+                        record.get("take_profit_distance_pips"),
+                        record.get("risk_reward_ratio"),
+                        record.get("volatility_state"),
+                        record.get("is_valid"),
+                        record.get("direction_confidence"),
+                        record.get("direction_reason"),
+                    ))
+                
+                # Use execute_values for efficient batch insert
+                execute_values(cur, insert_query, values, page_size=100)
+                
+    except psycopg2.OperationalError as e:
+        raise RuntimeError(f"Database operational error during batch signal insert: {e}")
+    except psycopg2.IntegrityError as e:
+        raise RuntimeError(f"Database integrity error during batch signal insert: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error during batch signal insert: {e}")
     finally:
         _put_conn(conn)
 
@@ -796,33 +904,47 @@ def insert_backtest_signals_batch(backtest_id: int, signals: List[Dict[str, Any]
 
 
 def fetch_recent_signals_by_symbol(symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
-    """Return the most recent signals for a given symbol."""
+    """Return the most recent signals for a given symbol with timeout protection."""
     conn = _get_conn()
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Set statement timeout for this query
+                cur.execute("SET statement_timeout = '15s'")
+                
                 cur.execute(
                     "select * from public.signals where symbol = %s order by timestamp desc limit %s",
                     (symbol, limit),
                 )
                 rows = cur.fetchall()
                 return [dict(row) for row in rows]
+    except psycopg2.OperationalError as e:
+        raise RuntimeError(f"Database operational error fetching recent signals: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error fetching recent signals: {e}")
     finally:
         _put_conn(conn)
 
 
 def fetch_latest_signal_by_symbol(symbol: str) -> Optional[Dict[str, Any]]:
-    """Return the latest signal row for a given symbol, or None."""
+    """Return the latest signal row for a given symbol, or None, with timeout protection."""
     conn = _get_conn()
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Set statement timeout for this query
+                cur.execute("SET statement_timeout = '10s'")
+                
                 cur.execute(
                     "select * from public.signals where symbol = %s order by timestamp desc limit 1",
                     (symbol,),
                 )
                 row = cur.fetchone()
                 return dict(row) if row else None
+    except psycopg2.OperationalError as e:
+        raise RuntimeError(f"Database operational error fetching latest signal: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error fetching latest signal: {e}")
     finally:
         _put_conn(conn)
 
@@ -954,3 +1076,53 @@ def fetch_signal_performance_summary(symbol: str = None, timeframe: str = None) 
                 return [dict(row) for row in rows]
     finally:
         _put_conn(conn)
+
+
+def check_database_health() -> Dict[str, Any]:
+    """Check database connectivity and basic performance metrics."""
+    import time
+    
+    health_status = {
+        "status": "unknown",
+        "connection_time_ms": None,
+        "query_time_ms": None,
+        "pool_available": False,
+        "error": None
+    }
+    
+    start_time = time.time()
+    
+    try:
+        # Test connection acquisition
+        conn = _get_conn()
+        connection_time = (time.time() - start_time) * 1000
+        health_status["connection_time_ms"] = round(connection_time, 2)
+        health_status["pool_available"] = True
+        
+        # Test basic query
+        query_start = time.time()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = '5s'")
+                cur.execute("SELECT 1 as health_check")
+                result = cur.fetchone()
+                
+        query_time = (time.time() - query_start) * 1000
+        health_status["query_time_ms"] = round(query_time, 2)
+        
+        if result and result[0] == 1:
+            health_status["status"] = "healthy"
+        else:
+            health_status["status"] = "unhealthy"
+            health_status["error"] = "Unexpected query result"
+            
+    except Exception as e:
+        health_status["status"] = "unhealthy"
+        health_status["error"] = str(e)
+    finally:
+        try:
+            _put_conn(conn)
+        except:
+            pass  # Don't mask original error
+    
+    return health_status

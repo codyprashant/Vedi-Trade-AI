@@ -109,71 +109,117 @@ class ThresholdManager:
         
         return regime, metadata
     
-    def detect_market_stress(self, market_conditions: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+    def detect_market_stress(self, market_conditions: dict) -> dict:
         """
-        Detect market stress conditions using multiple indicators.
+        Detect market stress conditions using multiple indicators and return a dict.
         
         Args:
             market_conditions: Dict containing market data
             
         Returns:
-            Tuple of (is_stressed, stress_metadata)
+            {
+              'is_stressed': bool,
+              'stress_level': 'none'|'low'|'medium'|'high'|'extreme',
+              'stress_score': float,
+              'indicators': { ... booleans for each stress trigger ... },
+              'threshold_recommendation': 'none'|'increase'|'decrease',
+              'recommended_adjustment': float,  # percentage points (+tighten, -loosen)
+              'details': { 'atr_ratio': float, 'rsi': float, 'macd_histogram': float, 'price_ma_deviation': float }
+            }
         """
         if not self.stress_detection_enabled:
-            return False, {'stress_detection_disabled': True}
+            return {
+                'is_stressed': False,
+                'stress_level': 'none',
+                'stress_score': 0.0,
+                'indicators': {},
+                'threshold_recommendation': 'none',
+                'recommended_adjustment': 0.0,
+                'details': {'stress_detection_disabled': True}
+            }
+        
+        atr_ratio = float(market_conditions.get('atr_ratio', 0.0))
+        rsi = float(market_conditions.get('rsi', 50.0))
+        macd_hist = float(market_conditions.get('macd_histogram', 0.0))
+        price_dev = abs(float(market_conditions.get('price_ma_deviation', 0.0)))  # percent (0.05 = 5%)
         
         stress_indicators = {}
         stress_score = 0.0
         
-        # ATR-based stress (extreme volatility)
-        atr_ratio = market_conditions.get('atr_ratio', 1.0)
-        if atr_ratio > self.volatility_regimes['extreme']:
-            stress_indicators['extreme_volatility'] = True
-            stress_score += 3.0
-        elif atr_ratio > self.volatility_regimes['high']:
-            stress_indicators['high_volatility'] = True
-            stress_score += 1.5
-        
-        # RSI-based stress (extreme overbought/oversold)
-        rsi_deviation = market_conditions.get('rsi_deviation', 0.0)
-        if rsi_deviation > 0.8:  # RSI > 90 or < 10
-            stress_indicators['extreme_rsi'] = True
+        # ATR stress
+        if atr_ratio >= 2.0:
+            stress_indicators['atr_extreme'] = True
             stress_score += 2.0
-        elif rsi_deviation > 0.6:  # RSI > 80 or < 20
-            stress_indicators['high_rsi'] = True
+        elif atr_ratio >= 1.5:
+            stress_indicators['atr_high'] = True
             stress_score += 1.0
         
-        # MACD-based stress (extreme histogram values)
-        macd_deviation = market_conditions.get('macd_histogram', 0.0)
-        if macd_deviation > 0.8:
-            stress_indicators['extreme_macd'] = True
-            stress_score += 1.5
-        elif macd_deviation > 0.5:
-            stress_indicators['high_macd'] = True
+        # RSI extremes
+        if rsi >= 80 or rsi <= 20:
+            stress_indicators['rsi_extreme'] = True
+            stress_score += 1.0
+        elif rsi >= 70 or rsi <= 30:
+            stress_indicators['rsi_high'] = True
             stress_score += 0.5
         
-        # Price deviation stress (far from moving averages)
-        price_ma_deviation = abs(market_conditions.get('price_ma_deviation', 0.0))
-        if price_ma_deviation > 5.0:  # > 5% from MAs
-            stress_indicators['extreme_price_deviation'] = True
-            stress_score += 2.0
-        elif price_ma_deviation > 3.0:  # > 3% from MAs
-            stress_indicators['high_price_deviation'] = True
+        # MACD histogram magnitude
+        if abs(macd_hist) >= 2.0:
+            stress_indicators['macd_extreme'] = True
+            stress_score += 1.5
+        elif abs(macd_hist) >= 0.8:
+            stress_indicators['macd_high'] = True
+            stress_score += 0.5
+        
+        # Deviation from MA (as percent)
+        if price_dev >= 0.10:    # >= 10%
+            stress_indicators['price_deviation_extreme'] = True
             stress_score += 1.0
+        elif price_dev >= 0.05:  # >= 5%
+            stress_indicators['price_deviation_high'] = True
+            stress_score += 0.5
         
-        # Determine stress level
-        is_stressed = stress_score >= 3.0  # Threshold for market stress
-        stress_level = 'extreme' if stress_score >= 5.0 else 'high' if stress_score >= 3.0 else 'normal'
+        # Map score -> stress level
+        if stress_score >= 3.0:
+            stress_level = 'extreme'
+        elif stress_score >= 2.0:
+            stress_level = 'high'
+        elif stress_score >= 1.0:
+            stress_level = 'medium'
+        elif stress_score > 0.0:
+            stress_level = 'low'
+        else:
+            stress_level = 'none'
         
-        stress_metadata = {
+        is_stressed = stress_level in ('medium', 'high', 'extreme')
+        
+        # Recommendation: stress => tighten threshold (increase)
+        if stress_level == 'extreme':
+            threshold_recommendation = 'increase'
+            recommended_adjustment = 8.0
+        elif stress_level == 'high':
+            threshold_recommendation = 'increase'
+            recommended_adjustment = 5.0
+        elif stress_level == 'medium':
+            threshold_recommendation = 'increase'
+            recommended_adjustment = 2.0
+        else:
+            threshold_recommendation = 'none'
+            recommended_adjustment = 0.0
+        
+        return {
             'is_stressed': is_stressed,
-            'stress_score': stress_score,
             'stress_level': stress_level,
+            'stress_score': round(stress_score, 3),
             'indicators': stress_indicators,
-            'recommendation': 'Loosen thresholds significantly' if is_stressed else 'Normal threshold operation'
+            'threshold_recommendation': threshold_recommendation,
+            'recommended_adjustment': recommended_adjustment,
+            'details': {
+                'atr_ratio': atr_ratio,
+                'rsi': rsi,
+                'macd_histogram': macd_hist,
+                'price_ma_deviation': price_dev
+            }
         }
-        
-        return is_stressed, stress_metadata
     
     def compute_adaptive_threshold(self, 
                                  atr_ratio: float,
@@ -306,7 +352,9 @@ class ThresholdManager:
         is_stressed = False
         stress_metadata = {}
         if market_conditions and self.stress_detection_enabled:
-            is_stressed, stress_metadata = self.detect_market_stress(market_conditions)
+            stress_result = self.detect_market_stress(market_conditions)
+            is_stressed = stress_result['is_stressed']
+            stress_metadata = stress_result
         
         # Base adjustment calculation
         normalized_atr = atr_ratio / self.atr_factor
@@ -455,7 +503,8 @@ class ThresholdManager:
                 "dynamic_threshold": dynamic_threshold,
                 "final_threshold": clamped_threshold,
                 "dynamic_range": [dynamic_min, dynamic_max],
-                "was_vote_clamped": clamped_threshold != dynamic_threshold
+                "was_vote_clamped": clamped_threshold != dynamic_threshold,
+                "market_conditions": market_conditions
             }
             
             logger.debug(f"Dynamic threshold for {symbol} {timeframe}: "

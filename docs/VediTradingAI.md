@@ -619,25 +619,59 @@ def evaluate_enhanced_macd(macd_line, macd_signal, macd_histogram, histogram_thr
         return "neutral"
 ```
 
-#### Phase 6: Volatility Classification
+#### Phase 6: Enhanced Volatility Classification
 
-**ATR-Based Volatility Analysis**:
+**ATR-Based Volatility Analysis with Metadata**:
 ```python
-def classify_volatility(h1_data, atr_length=14):
-    atr = ta.atr(h1_data['high'], h1_data['low'], h1_data['close'], length=atr_length)
-    current_atr = atr.iloc[-1]
-    atr_mean_50 = atr.rolling(50).mean().iloc[-1]
+def classify_volatility_regime(self, atr_ratio: float) -> Tuple[str, Dict[str, Any]]:
+    """
+    Classify market volatility regime based on ATR ratio.
     
-    atr_ratio = current_atr / atr_mean_50
+    Returns:
+        Tuple of (regime_string, metadata_dict)
+    """
+    # Enhanced regime classification with normal_low and normal_high
+    if atr_ratio < self.volatility_regimes['low']:  # < 0.7
+        regime = 'low'
+        description = 'Low volatility - Below average market movement'
+        adjustment_factor = 0.8
+    elif atr_ratio < self.volatility_regimes['normal_low']:  # 0.7 - 1.0
+        regime = 'normal_low'
+        description = 'Normal-Low volatility - Slightly below average'
+        adjustment_factor = 0.9
+    elif atr_ratio < self.volatility_regimes['normal_high']:  # 1.0 - 1.5
+        regime = 'normal_high'
+        description = 'Normal-High volatility - Slightly above average'
+        adjustment_factor = 1.0
+    elif atr_ratio < self.volatility_regimes['high']:  # 1.5 - 2.0
+        regime = 'high'
+        description = 'High volatility - Above average market movement'
+        adjustment_factor = 1.2
+    else:  # >= 2.0
+        regime = 'extreme'
+        description = 'Extreme volatility - Significantly elevated movement'
+        adjustment_factor = 1.5
     
-    if atr_ratio > 3.0:
-        return "Extreme"  # Skip signal generation
-    elif atr_ratio > 1.2:
-        return "High"     # Increased SL distance
-    elif atr_ratio < 0.8:
-        return "Low"      # Reduced SL distance  
-    else:
-        return "Normal"   # Standard SL distance
+    metadata = {
+        'regime': regime,
+        'atr_ratio': atr_ratio,
+        'description': description,
+        'adjustment_factor': adjustment_factor,
+        'thresholds': self.volatility_regimes
+    }
+    
+    return regime, metadata
+```
+
+**Configuration**:
+```python
+"volatility_regime_thresholds": {
+    "low": 0.7,         # ATR ratio < 0.7 = low volatility
+    "normal_low": 1.0,  # 0.7 <= ATR ratio < 1.0 = normal-low volatility
+    "normal_high": 1.5, # 1.0 <= ATR ratio < 1.5 = normal-high volatility
+    "high": 2.0,        # 1.5 <= ATR ratio < 2.0 = high volatility
+    # ATR ratio >= 2.0 = extreme volatility
+}
 ```
 
 #### Phase 7: Trade Plan Computation

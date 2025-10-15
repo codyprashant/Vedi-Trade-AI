@@ -21,11 +21,14 @@ from .config import (
     TREND_TIMEFRAME,
     ALIGNMENT_BOOST_H1,
     ALIGNMENT_BOOST_H4,
+    ALIGNMENT_BOOST_CONFIG,
     ATR_STABILITY_BONUS,
     PRICE_ACTION_BONUS,
     CONFIDENCE_ZONES,
     DEBUG_SIGNALS,
 )
+from .logging_config import get_logger, log_signal_event, log_performance, safe_log_value
+from .utils_time import as_utc_index, last_closed, safe_float, compute_bounded_alignment_boost
 from .indicators import (
     compute_indicators,
     evaluate_signals,
@@ -44,6 +47,20 @@ from .db import get_active_strategy_config
 from .threshold_manager import ThresholdManagerFactory
 from .sanity_filter import SignalSanityFilterFactory
 from .mtf_confirmation import MultiTimeframeConfirmation
+
+
+def _ts_changed(prev, curr):
+    """
+    Helper function to compare timestamps safely.
+    Returns True if timestamps are different or if either is None/invalid.
+    """
+    import pandas as pd
+    if prev is None or curr is None:
+        return True
+    try:
+        return pd.to_datetime(prev, utc=True) != pd.to_datetime(curr, utc=True)
+    except Exception:
+        return True
 
 
 class SignalEngine:
@@ -67,6 +84,9 @@ class SignalEngine:
         self.sanity_filter = SignalSanityFilterFactory.create_from_config(SANITY_FILTER_CONFIG["strict"])
         self.mtf_confirmation = MultiTimeframeConfirmation()
         self.debug = DEBUG_SIGNALS
+        
+        # Initialize logger
+        self.logger = get_logger('signals')
 
     async def run(self):
         self.running = True
@@ -83,7 +103,8 @@ class SignalEngine:
                 trend_tf = strategy.get("trend_timeframe", "4h")
                 # Enforce 10-minute monitoring interval (600s)
                 run_interval_seconds = max(600, int(strategy.get("run_interval_seconds", 600)))
-                signal_threshold = max(50.0, float(strategy.get("signal_threshold", SIGNAL_THRESHOLD)))
+                # Use ThresholdManager for all threshold decisions - no direct signal_threshold usage
+                # The threshold will be computed dynamically by ThresholdManager based on market conditions
 
                 # Iterate over configured symbols and evaluate
                 symbols: List[str] = strategy.get("symbols", ALLOWED_SYMBOLS)
@@ -127,22 +148,43 @@ class SignalEngine:
 
                     # Basic validation
                     if any(df is None or len(df) < 50 for df in (m15_df, h1_df, h4_df)):
-                        print(
-                            f"Signal logs - Signal Flow | {sym} {primary_tf} | gain N/A | "
-                            f"Fetch {fetch_report} | Result: insufficient_data"
+                        self.logger.warning(
+                            f"Signal Flow | {sym} {primary_tf} | gain N/A | "
+                            f"Fetch {fetch_report} | Result: insufficient_data",
+                            extra={'symbol': sym, 'timeframe': primary_tf, 'fetch_report': fetch_report}
                         )
-                        print(f"Signal logs - Insufficient data for {sym}; skipping.")
+                        self.logger.warning(f"Insufficient data for {sym}; skipping.", 
+                                          extra={'symbol': sym, 'reason': 'insufficient_data'})
                         continue
 
-                    # Basic validation
-                    if any(df is None or len(df) < 50 for df in (m15_df, h1_df, h4_df)):
-                        print(f"Signal logs - Insufficient data for {sym}; skipping.")
+                    # Normalize all DataFrames to UTC timezone
+                    m15_df = as_utc_index(m15_df)
+                    h1_df = as_utc_index(h1_df)
+                    h4_df = as_utc_index(h4_df)
+
+                    # Closed-bar alignment: align all timeframes to the last common closed bar
+                    try:
+                        anchor = min(
+                            last_closed(m15_df.index[-1], "15min"),
+                            last_closed(h1_df.index[-1], "1h"),
+                            last_closed(h4_df.index[-1], "4h")
+                        )
+                        m15_df = m15_df.loc[:anchor]
+                        h1_df = h1_df.loc[:anchor]
+                        h4_df = h4_df.loc[:anchor]
+                        
+                        # Validate we still have enough data after alignment
+                        if any(len(df) < 50 for df in (m15_df, h1_df, h4_df)):
+                            print(f"Signal logs - Insufficient data for {sym} after alignment; skipping.")
+                            continue
+                    except Exception as e:
+                        print(f"Signal logs - Error aligning bars for {sym}: {e}; skipping.")
                         continue
 
                     # Cache and compute H1 trend (per symbol) - MOVED BEFORE WEIGHTED VOTING
                     h1_ts = h1_df.iloc[-1]["time"]
                     cache_h1 = self.h1_cache_by_symbol.get(sym)
-                    if cache_h1 is None or str(cache_h1.get("ts")) != str(h1_ts):
+                    if cache_h1 is None or _ts_changed(cache_h1.get("ts"), h1_ts):
                         h1_dir = ema_trend_direction(h1_df, short_len=50, long_len=200)
                         h1_atr_last, h1_atr_mean50 = atr_last_and_mean(
                             h1_df,
@@ -162,7 +204,7 @@ class SignalEngine:
                     # Cache and compute H4 trend (per symbol) - MOVED BEFORE WEIGHTED VOTING
                     h4_ts = h4_df.iloc[-1]["time"]
                     cache_h4 = self.h4_cache_by_symbol.get(sym)
-                    if cache_h4 is None or str(cache_h4.get("ts")) != str(h4_ts):
+                    if cache_h4 is None or _ts_changed(cache_h4.get("ts"), h4_ts):
                         h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
                         self.h4_cache_by_symbol[sym] = {"ts": h4_ts, "dir": h4_dir, "atr": atr_last(h4_df, params=indicator_params)}
                     else:
@@ -418,10 +460,16 @@ class SignalEngine:
                     sl_pips = sl_distance / pip_value
                     tp_pips = tp_distance / pip_value
 
-                    # Multiplicative alignment boost: enhances base strength proportionally
-                    h1_multiplier = 1.0 + (float(ALIGNMENT_BOOST_H1) / 100.0) if aligns_h1 else 1.0
-                    h4_multiplier = 1.0 + (float(ALIGNMENT_BOOST_H4) / 100.0) if (aligns_h1 and h4_dir == h1_dir) else 1.0
-                    alignment_multiplier = h1_multiplier * h4_multiplier
+                    # Bounded alignment boost: prevents excessive signal amplification
+                    atr_ratio = atr_last(m15_df) / atr_last_and_mean(m15_df)[1] if len(m15_df) > 20 else 1.0
+                    h4_aligned = aligns_h1 and h4_dir == h1_dir
+                    alignment_multiplier, boost_details = compute_bounded_alignment_boost(
+                        base_strength=best["strength"],
+                        h1_aligned=aligns_h1,
+                        h4_aligned=h4_aligned,
+                        atr_ratio=atr_ratio,
+                        boost_config=ALIGNMENT_BOOST_CONFIG
+                    )
 
                     # Price action heuristic over last 5 candles
                     pa_dir = price_action_direction(m15_df, lookback=5, params=indicator_params)
@@ -713,7 +761,8 @@ class SignalEngine:
             primary_tf = strategy.get("primary_timeframe", DEFAULT_TIMEFRAME)
             confirmation_tf = strategy.get("confirmation_timeframe", "1h")
             trend_tf = strategy.get("trend_timeframe", "4h")
-            signal_threshold = max(50.0, float(strategy.get("signal_threshold", SIGNAL_THRESHOLD)))
+            # Use ThresholdManager for all threshold decisions - no direct signal_threshold usage
+            # The threshold will be computed dynamically by ThresholdManager based on market conditions
 
             # Iterate over configured or overridden symbols
             symbols: List[str] = symbols_override or strategy.get("symbols", ALLOWED_SYMBOLS)
@@ -766,6 +815,38 @@ class SignalEngine:
                     results.append({
                         "symbol": sym,
                         "status": "insufficient_data",
+                        "fetch": fetch_report,
+                    })
+                    continue
+
+                # Normalize all DataFrames to UTC timezone
+                m15_df = as_utc_index(m15_df)
+                h1_df = as_utc_index(h1_df)
+                h4_df = as_utc_index(h4_df)
+
+                # Closed-bar alignment: align all timeframes to the last common closed bar
+                try:
+                    anchor = min(
+                        last_closed(m15_df.index[-1], "15min"),
+                        last_closed(h1_df.index[-1], "1h"),
+                        last_closed(h4_df.index[-1], "4h")
+                    )
+                    m15_df = m15_df.loc[:anchor]
+                    h1_df = h1_df.loc[:anchor]
+                    h4_df = h4_df.loc[:anchor]
+                    
+                    # Validate we still have enough data after alignment
+                    if any(len(df) < 50 for df in (m15_df, h1_df, h4_df)):
+                        results.append({
+                            "symbol": sym,
+                            "status": "insufficient_data_after_alignment",
+                            "fetch": fetch_report,
+                        })
+                        continue
+                except Exception as e:
+                    results.append({
+                        "symbol": sym,
+                        "status": f"alignment_error: {e}",
                         "fetch": fetch_report,
                     })
                     continue
@@ -874,7 +955,7 @@ class SignalEngine:
                 # Cache and compute H1 trend (per symbol)
                 h1_ts = h1_df.iloc[-1]["time"]
                 cache_h1 = self.h1_cache_by_symbol.get(sym)
-                if cache_h1 is None or str(cache_h1.get("ts")) != str(h1_ts):
+                if cache_h1 is None or _ts_changed(cache_h1.get("ts"), h1_ts):
                     h1_dir = ema_trend_direction(h1_df, short_len=50, long_len=200)
                     h1_atr_last, h1_atr_mean50 = atr_last_and_mean(
                         h1_df,
@@ -894,7 +975,7 @@ class SignalEngine:
                 # Compute H4 trend (per symbol)
                 h4_ts = h4_df.iloc[-1]["time"]
                 cache_h4 = self.h4_cache_by_symbol.get(sym)
-                if cache_h4 is None or str(cache_h4.get("ts")) != str(h4_ts):
+                if cache_h4 is None or _ts_changed(cache_h4.get("ts"), h4_ts):
                     h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
                     self.h4_cache_by_symbol[sym] = {"ts": h4_ts, "dir": h4_dir}
                 else:
@@ -904,23 +985,42 @@ class SignalEngine:
                 m15_side = best["direction"]
                 h1_is_bull = h1_dir == "Bullish"
                 aligns_h1 = (m15_side == "buy" and h1_is_bull) or (m15_side == "sell" and not h1_is_bull)
-                # Multiplicative alignment boost: enhances base strength proportionally
-                h1_multiplier = 1.0 + (float(ALIGNMENT_BOOST_H1) / 100.0) if aligns_h1 else 1.0
-                h4_multiplier = 1.0 + (float(ALIGNMENT_BOOST_H4) / 100.0) if (aligns_h1 and h4_dir == h1_dir) else 1.0
-                alignment_multiplier = h1_multiplier * h4_multiplier
+                # Bounded alignment boost: prevents excessive signal amplification
+                atr_ratio = atr_last(m15_df) / atr_last_and_mean(m15_df)[1] if len(m15_df) > 20 else 1.0
+                h4_aligned = aligns_h1 and h4_dir == h1_dir
+                alignment_multiplier, boost_details = compute_bounded_alignment_boost(
+                    base_strength=best["strength"],
+                    h1_aligned=aligns_h1,
+                    h4_aligned=h4_aligned,
+                    atr_ratio=atr_ratio,
+                    boost_config=ALIGNMENT_BOOST_CONFIG
+                )
                 volatility_state = "Normal"  # Simplified for manual compute summary
                 entry_price = float(m15_df.iloc[-1]["close"]) if not math.isnan(float(m15_df.iloc[-1]["close"])) else None
                 stop_loss_price = None
                 take_profit_price = None
                 rr = 1.5  # Default RR ratio for logging
 
-                # Save only when final strength >= threshold (>=50%)
+                # Save only when final strength >= adaptive threshold (computed by ThresholdManager)
                 base_strength_val = best["strength"]
                 final_strength = min(100.0, base_strength_val * alignment_multiplier)
                 alignment_boost = final_strength - base_strength_val  # For logging compatibility
+                
+                # Use ThresholdManager for adaptive threshold computation
+                atr_ratio = atr_last(m15_df) / atr_last_and_mean(m15_df)[1] if len(m15_df) > 20 else 1.0
+                rsi_deviation = abs(res["RSI"].value - 50.0) if "RSI" in res else 0.0
+                macd_histogram = abs(res["MACD"].value) if "MACD" in res else 0.0
+                adaptive_threshold, threshold_details = self.threshold_manager.compute_adaptive_threshold(
+                    atr_ratio=atr_ratio,
+                    rsi_deviation=rsi_deviation,
+                    macd_histogram=macd_histogram,
+                    symbol=sym,
+                    timeframe=primary_tf
+                )
+                
                 had_signal = False
                 insert_status = "skipped"
-                if final_strength >= signal_threshold:
+                if final_strength >= adaptive_threshold:
                     record: Dict[str, Any] = {
                         "timestamp": ts,
                         "symbol": sym,

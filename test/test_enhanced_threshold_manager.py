@@ -54,19 +54,19 @@ class TestEnhancedThresholdManager(unittest.TestCase):
     def test_volatility_regime_classification(self):
         """Test volatility regime classification functionality."""
         # Test low volatility
-        low_vol_regime = self.threshold_manager.classify_volatility_regime(0.6)
+        low_vol_regime, low_vol_meta = self.threshold_manager.classify_volatility_regime(0.6)
         self.assertEqual(low_vol_regime, 'low')
         
         # Test normal volatility
-        normal_vol_regime = self.threshold_manager.classify_volatility_regime(1.2)
-        self.assertEqual(normal_vol_regime, 'normal')
+        normal_vol_regime, normal_vol_meta = self.threshold_manager.classify_volatility_regime(1.2)
+        self.assertEqual(normal_vol_regime, 'normal_high')
         
         # Test high volatility
-        high_vol_regime = self.threshold_manager.classify_volatility_regime(1.7)
+        high_vol_regime, high_vol_meta = self.threshold_manager.classify_volatility_regime(1.7)
         self.assertEqual(high_vol_regime, 'high')
         
         # Test extreme volatility
-        extreme_vol_regime = self.threshold_manager.classify_volatility_regime(2.3)
+        extreme_vol_regime, extreme_vol_meta = self.threshold_manager.classify_volatility_regime(2.3)
         self.assertEqual(extreme_vol_regime, 'extreme')
 
     def test_market_stress_detection(self):
@@ -74,7 +74,7 @@ class TestEnhancedThresholdManager(unittest.TestCase):
         # Test normal market conditions
         normal_stress = self.threshold_manager.detect_market_stress(self.normal_conditions)
         self.assertFalse(normal_stress['is_stressed'])
-        self.assertEqual(normal_stress['stress_level'], 'low')
+        self.assertEqual(normal_stress['stress_level'], 'none')
         
         # Test high volatility conditions
         high_vol_stress = self.threshold_manager.detect_market_stress(self.high_volatility_conditions)
@@ -84,7 +84,7 @@ class TestEnhancedThresholdManager(unittest.TestCase):
         # Test extreme volatility conditions
         extreme_stress = self.threshold_manager.detect_market_stress(self.extreme_volatility_conditions)
         self.assertTrue(extreme_stress['is_stressed'])
-        self.assertEqual(extreme_stress['stress_level'], 'high')
+        self.assertEqual(extreme_stress['stress_level'], 'extreme')
 
     def test_enhanced_volatility_adjustment(self):
         """Test enhanced volatility adjustment with regime classification."""
@@ -94,21 +94,21 @@ class TestEnhancedThresholdManager(unittest.TestCase):
         )
         self.assertIsInstance(normal_adj, float)
         self.assertIn('volatility_regime', normal_meta)
-        self.assertEqual(normal_meta['volatility_regime'], 'normal')
+        self.assertEqual(normal_meta['volatility_regime']['regime'], 'normal_high')
         
         # Test high volatility adjustment
         high_adj, high_meta = self.threshold_manager._calculate_volatility_adjustment(
             1.8, self.high_volatility_conditions
         )
         self.assertIsInstance(high_adj, float)
-        self.assertEqual(high_meta['volatility_regime'], 'high')
+        self.assertEqual(high_meta['volatility_regime']['regime'], 'high')
         self.assertGreater(abs(high_adj), abs(normal_adj))  # Higher volatility should have larger adjustment
         
         # Test extreme volatility adjustment
         extreme_adj, extreme_meta = self.threshold_manager._calculate_volatility_adjustment(
             2.5, self.extreme_volatility_conditions
         )
-        self.assertEqual(extreme_meta['volatility_regime'], 'extreme')
+        self.assertEqual(extreme_meta['volatility_regime']['regime'], 'extreme')
         self.assertGreater(abs(extreme_adj), abs(high_adj))  # Extreme volatility should have largest adjustment
 
     def test_adaptive_parameter_adjustment(self):
@@ -121,11 +121,11 @@ class TestEnhancedThresholdManager(unittest.TestCase):
         )
         
         # Test normal conditions
-        normal_threshold, normal_meta = adaptive_manager.compute_adaptive_threshold(self.normal_conditions)
+        normal_threshold, normal_meta = adaptive_manager.get_threshold_for_conditions(self.normal_conditions)
         self.assertIn('adaptive_weights', normal_meta)
         
         # Test extreme conditions - should adjust weights
-        extreme_threshold, extreme_meta = adaptive_manager.compute_adaptive_threshold(self.extreme_volatility_conditions)
+        extreme_threshold, extreme_meta = adaptive_manager.get_threshold_for_conditions(self.extreme_volatility_conditions)
         self.assertIn('adaptive_weights', extreme_meta)
         
         # Volatility weight should be higher in extreme conditions
@@ -162,7 +162,7 @@ class TestEnhancedThresholdManager(unittest.TestCase):
             'price_ma_deviation': 0.25
         }
         
-        threshold, _ = self.threshold_manager.compute_adaptive_threshold(extreme_conditions)
+        threshold, _ = self.threshold_manager.get_threshold_for_conditions(extreme_conditions)
         
         # Threshold should be clamped within bounds
         self.assertGreaterEqual(threshold, self.threshold_manager.min_threshold)
@@ -187,13 +187,13 @@ class TestEnhancedThresholdManager(unittest.TestCase):
 
     def test_metadata_completeness(self):
         """Test that all metadata fields are properly populated."""
-        threshold, metadata = self.threshold_manager.compute_adaptive_threshold(self.normal_conditions)
+        threshold, metadata = self.threshold_manager.get_threshold_for_conditions(self.normal_conditions)
         
         # Check required metadata fields
         required_fields = [
             'volatility_adjustment', 'momentum_adjustment', 'trend_adjustment',
-            'total_adjustment', 'base_threshold', 'adaptive_threshold',
-            'clamped_threshold', 'enhanced_volatility_analysis'
+            'total_adjustment', 'base_threshold', 'final_threshold',
+            'enhanced_volatility_analysis'
         ]
         
         for field in required_fields:

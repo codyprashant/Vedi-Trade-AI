@@ -55,6 +55,18 @@ WEIGHTS = {
 ALIGNMENT_BOOST_H1 = 10
 ALIGNMENT_BOOST_H4 = 5
 
+# Alignment boost bounding configuration to prevent excessive signal amplification
+ALIGNMENT_BOOST_CONFIG = {
+    "max_total_boost": 20.0,        # Maximum total alignment boost percentage (caps at 20%)
+    "max_individual_boost": 15.0,   # Maximum individual timeframe boost percentage
+    "volatility_scaling": True,     # Scale boost based on market volatility
+    "high_volatility_cap": 0.7,     # Reduce boost to 70% during high volatility (ATR ratio > 2.0)
+    "extreme_volatility_cap": 0.5,  # Reduce boost to 50% during extreme volatility (ATR ratio > 3.0)
+    "strength_based_scaling": True, # Scale boost based on base signal strength
+    "high_strength_threshold": 80.0, # Above this strength, apply diminishing returns
+    "diminishing_factor": 0.6       # Factor to reduce boost for high-strength signals
+}
+
 SIGNAL_THRESHOLD = 60  # percent
 
 # Enhanced Decision Tree Parameters
@@ -89,9 +101,10 @@ THRESHOLD_MANAGER_CONFIG = {
     "trend_weight": 0.3,
     # Enhanced volatility regime classification
     "volatility_regime_thresholds": {
-        "low": 0.8,      # ATR ratio < 0.8 = low volatility
-        "normal": 1.5,   # 0.8 <= ATR ratio < 1.5 = normal volatility
-        "high": 2.0,     # 1.5 <= ATR ratio < 2.0 = high volatility
+        "low": 0.7,         # ATR ratio < 0.7 = low volatility
+        "normal_low": 1.0,  # 0.7 <= ATR ratio < 1.0 = normal-low volatility
+        "normal_high": 1.5, # 1.0 <= ATR ratio < 1.5 = normal-high volatility
+        "high": 2.0,        # 1.5 <= ATR ratio < 2.0 = high volatility
         # ATR ratio >= 2.0 = extreme volatility
     },
     "stress_detection_enabled": True,
@@ -126,7 +139,26 @@ SANITY_FILTER_CONFIG = {
         },
         "enable_dynamic_body_validation": True,
         "max_wick_to_body_ratio": 4.0,
-        "min_directional_body_ratio": 0.4
+        "min_directional_body_ratio": 0.4,
+        # Volatility adaptation configuration
+        "volatility_adaptation": {
+            "enabled": True,
+            "base_atr_lookback": 20,  # Periods to calculate average ATR
+            "adaptation_factors": {
+                "very_low": {"body_ratio_factor": 0.8, "confidence_factor": 1.1},    # Relax body, increase confidence
+                "low": {"body_ratio_factor": 0.9, "confidence_factor": 1.05},        # Slightly relax requirements
+                "normal": {"body_ratio_factor": 1.0, "confidence_factor": 1.0},      # Standard requirements
+                "high": {"body_ratio_factor": 1.1, "confidence_factor": 0.95},       # Tighten body, relax confidence
+                "extreme": {"body_ratio_factor": 1.2, "confidence_factor": 0.9}      # Much tighter body, lower confidence
+            },
+            "volatility_ratio_thresholds": {
+                "very_low": 0.5,   # ATR ratio < 0.5 = very low volatility
+                "low": 0.8,        # 0.5 <= ATR ratio < 0.8 = low volatility  
+                "normal": 1.5,     # 0.8 <= ATR ratio < 1.5 = normal volatility
+                "high": 2.5,       # 1.5 <= ATR ratio < 2.5 = high volatility
+                "extreme": 3.5     # ATR ratio >= 2.5 = extreme volatility
+            }
+        }
     },
     "permissive": {
         "min_volatility": 0.001,
@@ -154,7 +186,26 @@ SANITY_FILTER_CONFIG = {
         },
         "enable_dynamic_body_validation": True,
         "max_wick_to_body_ratio": 6.0,
-        "min_directional_body_ratio": 0.25
+        "min_directional_body_ratio": 0.25,
+        # Volatility adaptation configuration (more permissive)
+        "volatility_adaptation": {
+            "enabled": True,
+            "base_atr_lookback": 20,  # Periods to calculate average ATR
+            "adaptation_factors": {
+                "very_low": {"body_ratio_factor": 0.7, "confidence_factor": 1.15},   # More relaxed body, higher confidence boost
+                "low": {"body_ratio_factor": 0.85, "confidence_factor": 1.08},       # Relaxed requirements
+                "normal": {"body_ratio_factor": 1.0, "confidence_factor": 1.0},      # Standard requirements
+                "high": {"body_ratio_factor": 1.05, "confidence_factor": 0.97},      # Slightly tighter body, small confidence reduction
+                "extreme": {"body_ratio_factor": 1.15, "confidence_factor": 0.92}    # Tighter body, moderate confidence reduction
+            },
+            "volatility_ratio_thresholds": {
+                "very_low": 0.5,   # ATR ratio < 0.5 = very low volatility
+                "low": 0.8,        # 0.5 <= ATR ratio < 0.8 = low volatility  
+                "normal": 1.5,     # 0.8 <= ATR ratio < 1.5 = normal volatility
+                "high": 2.5,       # 1.5 <= ATR ratio < 2.5 = high volatility
+                "extreme": 3.5     # ATR ratio >= 2.5 = extreme volatility
+            }
+        }
     }
 }
 

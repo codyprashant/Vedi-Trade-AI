@@ -35,7 +35,9 @@ class SignalSanityFilter:
                  body_ratio_thresholds: Dict[str, float] = None,
                  enable_dynamic_body_validation: bool = True,
                  max_wick_to_body_ratio: float = 5.0,
-                 min_directional_body_ratio: float = 0.3):
+                 min_directional_body_ratio: float = 0.3,
+                 # Volatility adaptation parameters
+                 volatility_adaptation: Dict[str, Any] = None):
         """
         Initialize SignalSanityFilter with configurable parameters.
         
@@ -86,6 +88,26 @@ class SignalSanityFilter:
         self.max_wick_to_body_ratio = max_wick_to_body_ratio
         self.min_directional_body_ratio = min_directional_body_ratio
         
+        # Volatility adaptation setup
+        self.volatility_adaptation = volatility_adaptation or {
+            "enabled": False,
+            "base_atr_lookback": 20,
+            "adaptation_factors": {
+                "very_low": {"body_ratio_factor": 1.0, "confidence_factor": 1.0},
+                "low": {"body_ratio_factor": 1.0, "confidence_factor": 1.0},
+                "normal": {"body_ratio_factor": 1.0, "confidence_factor": 1.0},
+                "high": {"body_ratio_factor": 1.0, "confidence_factor": 1.0},
+                "extreme": {"body_ratio_factor": 1.0, "confidence_factor": 1.0}
+            },
+            "volatility_ratio_thresholds": {
+                "very_low": 0.5, "low": 0.8, "normal": 1.5, "high": 2.5, "extreme": 3.5
+            }
+        }
+        
+        # Store original thresholds for adaptation
+        self.base_min_body_ratio = min_body_ratio
+        self.base_min_confidence = min_confidence
+        
         # Statistics tracking
         self.filter_stats = {
             "total_signals": 0,
@@ -95,7 +117,8 @@ class SignalSanityFilter:
             "rejected_low_confidence": 0,
             "rejected_high_spread": 0,
             "rejected_low_volume": 0,
-            "rejected_pattern_invalid": 0
+            "rejected_pattern_invalid": 0,
+            "volatility_adaptations": 0
         }
         
         logger.info(f"SignalSanityFilter initialized: min_volatility={min_volatility}, "
@@ -141,6 +164,9 @@ class SignalSanityFilter:
             body_ratio = body / range_size if range_size > 0 else 0
             atr_ratio = atr / close_price if close_price > 0 else 0
             
+            # Apply volatility adaptation to adjust thresholds
+            adapted_body_ratio, adapted_confidence = self._adapt_thresholds_for_volatility(atr_ratio)
+            
             # Extract signal direction from additional data if available
             signal_direction = additional_data.get('signal_direction') if additional_data else None
             
@@ -163,19 +189,19 @@ class SignalSanityFilter:
             else:
                 atr_metadata = {'validation_disabled': True}
             
-            # 2. Enhanced Candle Pattern Filter
+            # 2. Enhanced Candle Pattern Filter (with volatility adaptation)
             if self.enable_candle_pattern_filter:
                 if self.enable_dynamic_body_validation:
-                    # Use enhanced candle validation with dynamic thresholds
-                    candle_valid, candle_reason, candle_metadata = self._enhanced_candle_validation(
-                        candle, signal_strength, signal_direction
+                    # Use enhanced candle validation with volatility-adapted dynamic thresholds
+                    candle_valid, candle_reason, candle_metadata = self._enhanced_candle_validation_adapted(
+                        candle, signal_strength, adapted_body_ratio, signal_direction
                     )
                 else:
-                    # Use basic candle pattern validation
-                    candle_valid, candle_reason = self._check_candle_pattern(
-                        body_ratio, open_price, close_price, high_price, low_price
+                    # Use basic candle pattern validation with adapted threshold
+                    candle_valid, candle_reason = self._check_candle_pattern_adapted(
+                        body_ratio, adapted_body_ratio, open_price, close_price, high_price, low_price
                     )
-                    candle_metadata = {'basic_validation': True, 'body_ratio': body_ratio}
+                    candle_metadata = {'basic_validation': True, 'body_ratio': body_ratio, 'adapted_body_ratio': adapted_body_ratio}
                 
                 validation_results.append(candle_valid)
                 if not candle_valid:
@@ -184,9 +210,11 @@ class SignalSanityFilter:
             else:
                 candle_metadata = {'validation_disabled': True}
             
-            # 3. Confidence Filter
+            # 3. Confidence Filter (with volatility adaptation)
             if self.enable_confidence_filter:
-                confidence_valid, confidence_reason = self._check_confidence(direction_confidence)
+                confidence_valid, confidence_reason = self._check_confidence_adapted(
+                    direction_confidence, adapted_confidence
+                )
                 validation_results.append(confidence_valid)
                 if not confidence_valid:
                     rejection_reasons.append(confidence_reason)
@@ -258,7 +286,18 @@ class SignalSanityFilter:
                 "validation_features": {
                     "atr_regime_validation": self.enable_atr_regime_validation,
                     "dynamic_body_validation": self.enable_dynamic_body_validation,
-                    "enhanced_filters_used": self.enable_atr_regime_validation or self.enable_dynamic_body_validation
+                    "enhanced_filters_used": self.enable_atr_regime_validation or self.enable_dynamic_body_validation,
+                    "volatility_adaptation_enabled": self.volatility_adaptation["enabled"]
+                },
+                "volatility_adaptation": {
+                    "enabled": self.volatility_adaptation["enabled"],
+                    "volatility_regime": self._classify_volatility_regime(atr_ratio) if self.volatility_adaptation["enabled"] else None,
+                    "adapted_body_ratio": adapted_body_ratio,
+                    "adapted_confidence": adapted_confidence,
+                    "base_body_ratio": self.base_min_body_ratio,
+                    "base_confidence": self.base_min_confidence,
+                    "body_adaptation_factor": adapted_body_ratio / self.base_min_body_ratio,
+                    "confidence_adaptation_factor": adapted_confidence / self.base_min_confidence
                 }
             }
             
@@ -287,6 +326,52 @@ class SignalSanityFilter:
             return False, f"low_volatility (atr_ratio={atr_ratio:.6f} < {self.min_volatility})"
         return True, "volatility_ok"
     
+    def _classify_volatility_regime(self, atr_ratio: float) -> str:
+        """
+        Classify the current volatility regime based on ATR ratio.
+        
+        Args:
+            atr_ratio: Current ATR ratio (current ATR / average ATR)
+            
+        Returns:
+            str: Volatility regime classification
+        """
+        thresholds = self.volatility_adaptation["volatility_ratio_thresholds"]
+        
+        if atr_ratio < thresholds["very_low"]:
+            return "very_low"
+        elif atr_ratio < thresholds["low"]:
+            return "low"
+        elif atr_ratio < thresholds["normal"]:
+            return "normal"
+        elif atr_ratio < thresholds["high"]:
+            return "high"
+        else:
+            return "extreme"
+    
+    def _adapt_thresholds_for_volatility(self, atr_ratio: float) -> Tuple[float, float]:
+        """
+        Adapt body ratio and confidence thresholds based on current volatility regime.
+        
+        Args:
+            atr_ratio: Current ATR ratio (current ATR / average ATR)
+            
+        Returns:
+            Tuple[float, float]: Adapted (min_body_ratio, min_confidence)
+        """
+        if not self.volatility_adaptation["enabled"]:
+            return self.base_min_body_ratio, self.base_min_confidence
+        
+        regime = self._classify_volatility_regime(atr_ratio)
+        factors = self.volatility_adaptation["adaptation_factors"][regime]
+        
+        adapted_body_ratio = self.base_min_body_ratio * factors["body_ratio_factor"]
+        adapted_confidence = self.base_min_confidence * factors["confidence_factor"]
+        
+        self.filter_stats["volatility_adaptations"] += 1
+        
+        return adapted_body_ratio, adapted_confidence
+    
     def _check_candle_pattern(self, body_ratio: float, open_price: float, 
                             close_price: float, high_price: float, 
                             low_price: float) -> Tuple[bool, str]:
@@ -311,11 +396,41 @@ class SignalSanityFilter:
         
         return True, "candle_pattern_ok"
     
+    def _check_candle_pattern_adapted(self, body_ratio: float, adapted_body_ratio: float, 
+                                    open_price: float, close_price: float, 
+                                    high_price: float, low_price: float) -> Tuple[bool, str]:
+        """Check candle pattern validity with volatility-adapted thresholds."""
+        # Body ratio check with adapted threshold
+        if body_ratio < adapted_body_ratio:
+            return False, f"weak_candle_body_adapted (ratio={body_ratio:.3f} < {adapted_body_ratio:.3f})"
+        
+        # Doji filter (very small body relative to range)
+        if body_ratio < 0.1:
+            return False, "doji_candle_rejected"
+        
+        # Extreme wick filter (body should not be too small compared to wicks)
+        upper_wick = high_price - max(open_price, close_price)
+        lower_wick = min(open_price, close_price) - low_price
+        body_size = abs(close_price - open_price)
+        
+        if body_size > 0:
+            wick_to_body_ratio = (upper_wick + lower_wick) / body_size
+            if wick_to_body_ratio > 5.0:  # Wicks more than 5x body size
+                return False, f"excessive_wicks (ratio={wick_to_body_ratio:.2f})"
+        
+        return True, "candle_pattern_ok_adapted"
+    
     def _check_confidence(self, direction_confidence: float) -> Tuple[bool, str]:
-        """Check if direction confidence meets minimum requirements."""
+        """Check if direction confidence meets minimum threshold."""
         if direction_confidence < self.min_confidence:
-            return False, f"low_confidence ({direction_confidence:.1f}% < {self.min_confidence}%)"
+            return False, f"low_confidence_{direction_confidence:.1f}_min_{self.min_confidence}"
         return True, "confidence_ok"
+    
+    def _check_confidence_adapted(self, direction_confidence: float, adapted_min_confidence: float) -> Tuple[bool, str]:
+        """Check if direction confidence meets volatility-adapted minimum threshold."""
+        if direction_confidence < adapted_min_confidence:
+            return False, f"low_confidence_{direction_confidence:.1f}_adapted_min_{adapted_min_confidence:.1f}"
+        return True, "confidence_ok_adapted"
     
     def _check_spread(self, spread: float, price: float) -> Tuple[bool, str]:
         """Check if spread is within acceptable limits."""
@@ -502,6 +617,74 @@ class SignalSanityFilter:
         }
         
         return validation_passed, rejection_reason, metadata
+    
+    def _enhanced_candle_validation_adapted(self, candle: Dict[str, float], signal_strength: float, 
+                                          adapted_body_ratio: float, signal_direction: str = None) -> Tuple[bool, str, Dict[str, Any]]:
+        """Enhanced candle body ratio validation with volatility-adapted dynamic thresholds."""
+        open_price = candle.get('open', 0)
+        high_price = candle.get('high', 0)
+        low_price = candle.get('low', 0)
+        close_price = candle.get('close', 0)
+        
+        # Calculate candle metrics
+        body = abs(close_price - open_price)
+        range_size = high_price - low_price
+        body_ratio = body / range_size if range_size > 0 else 0
+        
+        # Calculate wick metrics
+        upper_wick = high_price - max(open_price, close_price)
+        lower_wick = min(open_price, close_price) - low_price
+        total_wick = upper_wick + lower_wick
+        wick_to_body_ratio = total_wick / body if body > 0 else float('inf')
+        
+        # Classify candle strength
+        candle_strength = self._classify_candle_strength(body_ratio)
+        
+        # Validation logic with adapted thresholds
+        validation_passed = True
+        rejection_reasons = []
+        
+        # 1. Adapted body ratio check
+        if body_ratio < adapted_body_ratio:
+            validation_passed = False
+            rejection_reasons.append(f"body_ratio_too_small_adapted ({body_ratio:.3f} < {adapted_body_ratio:.3f})")
+        
+        # 2. Doji filter (still use base threshold for doji detection)
+        if candle_strength == 'doji':
+            validation_passed = False
+            rejection_reasons.append(f"doji_candle_rejected (body_ratio={body_ratio:.3f})")
+        
+        # 3. Directional signal validation (use adapted threshold)
+        adapted_directional_ratio = self.min_directional_body_ratio * (adapted_body_ratio / self.base_min_body_ratio)
+        if signal_direction and body_ratio < adapted_directional_ratio:
+            validation_passed = False
+            rejection_reasons.append(f"insufficient_directional_body_adapted ({body_ratio:.3f} < {adapted_directional_ratio:.3f})")
+        
+        # 4. Wick-to-body ratio check (unchanged)
+        if wick_to_body_ratio > self.max_wick_to_body_ratio:
+            validation_passed = False
+            rejection_reasons.append(f"excessive_wicks (ratio={wick_to_body_ratio:.2f} > {self.max_wick_to_body_ratio})")
+        
+        # 5. Signal strength consistency with candle strength (unchanged)
+        if candle_strength == 'weak' and signal_strength > 80:
+            validation_passed = False
+            rejection_reasons.append(f"candle_signal_mismatch (weak_candle={body_ratio:.3f}, strong_signal={signal_strength:.1f}%)")
+        
+        # Create detailed metadata
+        metadata = {
+            "candle_strength": candle_strength,
+            "body_ratio": round(body_ratio, 4),
+            "adapted_body_ratio": round(adapted_body_ratio, 4),
+            "adaptation_factor": round(adapted_body_ratio / self.base_min_body_ratio, 3),
+            "wick_to_body_ratio": round(wick_to_body_ratio, 2),
+            "upper_wick": round(upper_wick, 5),
+            "lower_wick": round(lower_wick, 5),
+            "validation_passed": validation_passed,
+            "rejection_reasons": rejection_reasons,
+            "volatility_adapted": True
+        }
+        
+        return validation_passed, "; ".join(rejection_reasons) if rejection_reasons else "candle_valid_adapted", metadata
     
     def get_filter_statistics(self) -> Dict[str, Any]:
         """Get filtering statistics for analysis."""
@@ -700,5 +883,7 @@ class SignalSanityFilterFactory:
             body_ratio_thresholds=config.get('body_ratio_thresholds'),
             enable_dynamic_body_validation=config.get('enable_dynamic_body_validation', True),
             max_wick_to_body_ratio=config.get('max_wick_to_body_ratio', 5.0),
-            min_directional_body_ratio=config.get('min_directional_body_ratio', 0.3)
+            min_directional_body_ratio=config.get('min_directional_body_ratio', 0.3),
+            # Volatility adaptation
+            volatility_adaptation=config.get('volatility_adaptation')
         )
