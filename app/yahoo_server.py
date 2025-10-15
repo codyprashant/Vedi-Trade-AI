@@ -23,7 +23,7 @@ from .indicators import (
 )
 from .db import (
     ensure_signals_table,
-
+    ensure_new_backtesting_tables,
     ensure_strategy_tables,
     create_default_gold_strategy_if_missing,
     fetch_recent_signals,
@@ -868,7 +868,7 @@ async def init_env_and_start_signal_engine():
     except Exception as e:
         print(f"Postgres init failed (signals): {e}")
     try:
-    
+        ensure_new_backtesting_tables()
     except Exception as e:
         print(f"Postgres init failed (backtesting): {e}")
     try:

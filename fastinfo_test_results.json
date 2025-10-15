@@ -4,7 +4,7 @@
     "yahoo_symbol": "GC=F",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T13:48:00.789349",
+    "timestamp": "2025-10-15T21:32:31.635522",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -55,12 +55,12 @@
         "is_none": false
       },
       "lastPrice": {
-        "value": 4218.39990234375,
+        "value": 4226.7001953125,
         "type": "<class 'float'>",
         "is_none": false
       },
       "lastVolume": {
-        "value": 147914,
+        "value": 291231,
         "type": "<class 'int'>",
         "is_none": false
       },
@@ -136,7 +136,7 @@
     "yahoo_symbol": "USDCAD=X",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T13:48:02.656314",
+    "timestamp": "2025-10-15T21:32:33.405418",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -167,12 +167,12 @@
         "is_none": false
       },
       "dayHigh": {
-        "value": 1.4048199653625488,
+        "value": 1.4059799909591675,
         "type": "<class 'float'>",
         "is_none": false
       },
       "dayLow": {
-        "value": 1.402400016784668,
+        "value": 1.4023000001907349,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -187,7 +187,7 @@
         "is_none": false
       },
       "lastPrice": {
-        "value": 1.403689980506897,
+        "value": 1.404919981956482,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -268,7 +268,7 @@
     "yahoo_symbol": "GBPUSD=X",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T13:48:03.581050",
+    "timestamp": "2025-10-15T21:32:34.565530",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -299,7 +299,7 @@
         "is_none": false
       },
       "dayHigh": {
-        "value": 1.3373095989227295,
+        "value": 1.3401411771774292,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -319,7 +319,7 @@
         "is_none": false
       },
       "lastPrice": {
-        "value": 1.3354344367980957,
+        "value": 1.3389031887054443,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -400,7 +400,7 @@
     "yahoo_symbol": "^GSPC",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T13:48:04.369949",
+    "timestamp": "2025-10-15T21:32:35.530242",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -431,12 +431,12 @@
         "is_none": false
       },
       "dayHigh": {
-        "value": 6680.7001953125,
+        "value": 6724.1201171875,
         "type": "<class 'float'>",
         "is_none": false
       },
       "dayLow": {
-        "value": 6555.06982421875,
+        "value": 6612.10986328125,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -451,12 +451,12 @@
         "is_none": false
       },
       "lastPrice": {
-        "value": 6644.31005859375,
+        "value": 6676.080078125,
         "type": "<class 'float'>",
         "is_none": false
       },
       "lastVolume": {
-        "value": 5666920000,
+        "value": 2052684000,
         "type": "<class 'int'>",
         "is_none": false
       },
@@ -466,12 +466,12 @@
         "is_none": true
       },
       "open": {
-        "value": 6602.490234375,
+        "value": 6688.27001953125,
         "type": "<class 'float'>",
         "is_none": false
       },
       "previousClose": {
-        "value": 6654.72,
+        "value": 6644.31,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -481,7 +481,7 @@
         "is_none": false
       },
       "regularMarketPreviousClose": {
-        "value": 6654.72021484375,
+        "value": 6644.31005859375,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -532,7 +532,7 @@
     "yahoo_symbol": "AAPL",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T13:48:05.082450",
+    "timestamp": "2025-10-15T21:32:36.774264",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -563,12 +563,12 @@
         "is_none": false
       },
       "dayHigh": {
-        "value": 248.85000610351562,
+        "value": 251.82000732421875,
         "type": "<class 'float'>",
         "is_none": false
       },
       "dayLow": {
-        "value": 244.6999969482422,
+        "value": 247.47999572753906,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -583,22 +583,22 @@
         "is_none": false
       },
       "lastPrice": {
-        "value": 247.77000427246094,
+        "value": 249.88499450683594,
         "type": "<class 'float'>",
         "is_none": false
       },
       "lastVolume": {
-        "value": 35447900,
+        "value": 20941309,
         "type": "<class 'int'>",
         "is_none": false
       },
       "marketCap": {
-        "value": 3677003493704.9863,
+        "value": 3708390773629.3027,
         "type": "<class 'float'>",
         "is_none": false
       },
       "open": {
-        "value": 246.60000610351562,
+        "value": 249.3800048828125,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -613,7 +613,7 @@
         "is_none": false
       },
       "regularMarketPreviousClose": {
-        "value": 247.66000366210938,
+        "value": 247.77000427246094,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -623,12 +623,12 @@
         "is_none": false
       },
       "tenDayAverageVolume": {
-        "value": 42752840,
+        "value": 42755850,
         "type": "<class 'int'>",
         "is_none": false
       },
       "threeMonthAverageVolume": {
-        "value": 54531018,
+        "value": 54531481,
         "type": "<class 'int'>",
         "is_none": false
       },

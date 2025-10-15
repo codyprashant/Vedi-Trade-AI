@@ -155,27 +155,214 @@ threshold_result = threshold_manager.compute_dynamic_threshold_with_votes(
 )
 ```
 
+## Practical Examples
+
+### Example 1: Strong Bullish Consensus
+
+#### Input Indicators
+```python
+indicators = {
+    "RSI": IndicatorResult(direction="buy", vote=1, strength=85.0, label="strong"),
+    "MACD": IndicatorResult(direction="buy", vote=1, strength=90.0, label="strong"),
+    "BBANDS": IndicatorResult(direction="buy", vote=1, strength=75.0, label="strong"),
+    "SMA_EMA": IndicatorResult(direction="buy", vote=1, strength=80.0, label="strong"),
+    "STOCH": IndicatorResult(direction="neutral", vote=0, strength=50.0, label="weak")
+}
+
+weights = {"RSI": 15, "MACD": 20, "BBANDS": 10, "SMA_EMA": 15, "STOCH": 10}
+```
+
+#### Calculation Process
+```
+1. Effective Votes:
+   - RSI: 1 × 1.0 = 1.0 (strong)
+   - MACD: 1 × 1.0 = 1.0 (strong)
+   - BBANDS: 1 × 1.0 = 1.0 (strong)
+   - SMA_EMA: 1 × 1.0 = 1.0 (strong)
+   - STOCH: 0 × 1.0 = 0.0 (neutral)
+
+2. Weighted Score:
+   weighted_score = (15×1.0) + (20×1.0) + (10×1.0) + (15×1.0) + (10×0.0) = 60.0
+   max_possible_score = 15 + 20 + 10 + 15 + 10 = 70.0
+
+3. Normalized Score:
+   normalized_score = (60.0 / 70.0) × 100 = 85.7
+
+4. Direction: 85.7 ≥ 60.0 → "buy"
+
+5. Confidence:
+   base_confidence = min(85.7 / 100.0, 1.0) = 0.857
+   strong_signals = 4 ≥ 2 → confidence_multiplier = 1.2
+   final_confidence = min(0.857 × 1.2, 1.0) = 1.0
+```
+
+#### Output
+```python
+{
+    "weighted_score": 60.0,
+    "normalized_score": 85.7,
+    "final_direction": "buy",
+    "signal_strength": 85.7,
+    "confidence": 1.0,
+    "strong_signals": 4,
+    "weak_signals": 0,
+    "indicator_count": 5,
+    "threshold_used": 60.0
+}
+```
+
+### Example 2: Mixed Signals with Weak Consensus
+
+#### Input Indicators
+```python
+indicators = {
+    "RSI": IndicatorResult(direction="buy", vote=1, strength=60.0, label="weak"),
+    "MACD": IndicatorResult(direction="sell", vote=-1, strength=55.0, label="weak"),
+    "BBANDS": IndicatorResult(direction="neutral", vote=0, strength=50.0, label="weak"),
+    "SMA_EMA": IndicatorResult(direction="buy", vote=1, strength=70.0, label="strong"),
+    "STOCH": IndicatorResult(direction="sell", vote=-1, strength=65.0, label="weak")
+}
+```
+
+#### Calculation Process
+```
+1. Effective Votes:
+   - RSI: 1 × 0.5 = 0.5 (weak)
+   - MACD: -1 × 0.5 = -0.5 (weak)
+   - BBANDS: 0 × 0.5 = 0.0 (neutral)
+   - SMA_EMA: 1 × 1.0 = 1.0 (strong)
+   - STOCH: -1 × 0.5 = -0.5 (weak)
+
+2. Weighted Score:
+   weighted_score = (15×0.5) + (20×-0.5) + (10×0.0) + (15×1.0) + (10×-0.5) = 7.5 - 10.0 + 0.0 + 15.0 - 5.0 = 7.5
+
+3. Normalized Score:
+   normalized_score = (7.5 / 70.0) × 100 = 10.7
+
+4. Direction: -60.0 < 10.7 < 60.0 → "neutral"
+
+5. Confidence:
+   base_confidence = min(10.7 / 100.0, 1.0) = 0.107
+   strong_signals = 1, weak_signals = 3 ≥ 2 → confidence_multiplier = 1.1
+   final_confidence = min(0.107 × 1.1, 1.0) = 0.118
+```
+
+#### Output
+```python
+{
+    "weighted_score": 7.5,
+    "normalized_score": 10.7,
+    "final_direction": "neutral",
+    "signal_strength": 0.0,
+    "confidence": 0.118,
+    "strong_signals": 1,
+    "weak_signals": 3,
+    "indicator_count": 5,
+    "threshold_used": 60.0
+}
+```
+
+### Example 3: Strong Bearish Consensus
+
+#### Input Indicators
+```python
+indicators = {
+    "RSI": IndicatorResult(direction="sell", vote=-1, strength=85.0, label="strong"),
+    "MACD": IndicatorResult(direction="sell", vote=-1, strength=90.0, label="strong"),
+    "BBANDS": IndicatorResult(direction="sell", vote=-1, strength=75.0, label="strong"),
+    "SMA_EMA": IndicatorResult(direction="sell", vote=-1, strength=80.0, label="strong")
+}
+```
+
+#### Calculation Process
+```
+1. Effective Votes: All -1.0 (strong sell signals)
+2. Weighted Score: -(15 + 20 + 10 + 15) = -60.0
+3. Normalized Score: (-60.0 / 60.0) × 100 = -100.0
+4. Direction: -100.0 ≤ -60.0 → "sell"
+5. Confidence: min(1.0 × 1.2, 1.0) = 1.0 (4 strong signals)
+```
+
+#### Output
+```python
+{
+    "weighted_score": -60.0,
+    "normalized_score": -100.0,
+    "final_direction": "sell",
+    "signal_strength": 100.0,
+    "confidence": 1.0,
+    "strong_signals": 4,
+    "weak_signals": 0,
+    "indicator_count": 4,
+    "threshold_used": 60.0
+}
+```
+
 ## Algorithm Details
 
-### Vote Score Calculation
+### Mathematical Formulas
 
-1. **Weighted Contribution**: `vote × strength × weight × strength_multiplier`
-2. **Strength Multiplier**: 1.0 for strong signals, 0.6 for weak signals
-3. **Normalization**: Total weighted vote ÷ total weight
+#### 1. Effective Vote Calculation
+For each indicator `i`:
+```
+effective_vote_i = {
+    vote_i           if label_i == 'strong'    (full weight)
+    vote_i × 0.5     if label_i == 'weak'      (partial weight)
+    0.0              if label_i == 'neutral'   (no contribution)
+}
+```
 
-### Direction Determination
+#### 2. Weighted Score Calculation
+```
+weighted_score = Σ(weight_i × effective_vote_i) for all indicators i
+max_possible_score = Σ|weight_i| for all indicators i
+```
 
-- **Buy**: `vote_score > 0.1`
-- **Sell**: `vote_score < -0.1`
-- **Neutral**: `-0.1 ≤ vote_score ≤ 0.1`
+#### 3. Normalized Score Calculation
+```
+normalized_score = (weighted_score / max_possible_score) × 100
+```
+Range: [-100, +100] where:
+- +100 = All indicators strongly bullish
+- -100 = All indicators strongly bearish
+- 0 = Perfect neutrality
 
-### Confidence Calculation
+#### 4. Direction Determination
+```
+final_direction = {
+    "buy"      if normalized_score ≥ +threshold
+    "sell"     if normalized_score ≤ -threshold  
+    "neutral"  otherwise
+}
+```
+Default threshold = 60.0 (configurable)
 
-1. **Base Confidence**: `min(abs(vote_score), 1.0)`
-2. **Strong Signal Bonus**: 
-   - 20% boost for 2+ strong signals
-   - 10% boost for 1 strong + 2+ weak signals
-3. **Final Cap**: Maximum confidence of 1.0
+#### 5. Confidence Calculation
+```
+base_confidence = min(|normalized_score| / 100.0, 1.0)
+
+confidence_multiplier = {
+    1.2  if strong_signals ≥ 2
+    1.1  if strong_signals == 1 AND weak_signals ≥ 2
+    1.0  otherwise
+}
+
+final_confidence = min(base_confidence × confidence_multiplier, 1.0)
+```
+
+### Signal Strength Classification
+
+- **Strong Signals**: Full vote weight (1.0 multiplier)
+  - RSI oversold/overbought (< 30 or > 70)
+  - MACD strong crossovers
+  - Clear trend confirmations
+- **Weak Signals**: Partial vote weight (0.5 multiplier)
+  - Mild trend indicators
+  - Borderline oscillator readings
+  - Uncertain market conditions
+- **Neutral Signals**: No contribution (0.0 multiplier)
+  - Indicators in equilibrium
+  - Conflicting or unclear signals
 
 ## Benefits
 
@@ -204,22 +391,171 @@ threshold_result = threshold_manager.compute_dynamic_threshold_with_votes(
 ### Default Indicator Weights
 
 ```python
-WEIGHTS = {
-    "RSI": 15,      # Momentum oscillator
-    "MACD": 20,     # Trend and momentum
-    "BBANDS": 15,   # Volatility and mean reversion
-    "STOCH": 10,    # Momentum oscillator
-    "ATR": 5        # Volatility filter
+DEFAULT_WEIGHTS = {
+    "MTF": 10,              # Multi-timeframe confirmation
+    "RSI": 15,              # Momentum oscillator (primary)
+    "MACD": 20,             # Trend and momentum (highest weight)
+    "STOCH": 10,            # Momentum oscillator (secondary)
+    "BBANDS": 10,           # Volatility and mean reversion
+    "SMA_EMA": 15,          # Moving average trends
+    "PRICE_ACTION": 10,     # Candlestick patterns
+    "ATR_STABILITY": 10,    # Volatility filter
+    # Individual fallbacks
+    "SMA": 7.5,             # Simple moving average
+    "EMA": 7.5              # Exponential moving average
 }
 ```
 
-### Customization
+### Weight Rationale
 
-Weights can be adjusted based on:
-- Market conditions (trending vs ranging)
-- Asset class characteristics
-- Historical performance analysis
-- Risk tolerance
+| Indicator | Weight | Justification |
+|-----------|--------|---------------|
+| **MACD** | 20 | Primary trend indicator with dual momentum/trend signals |
+| **RSI** | 15 | Reliable momentum with clear overbought/oversold levels |
+| **SMA_EMA** | 15 | Fundamental trend direction confirmation |
+| **MTF** | 10 | Multi-timeframe alignment reduces false signals |
+| **STOCH** | 10 | Secondary momentum confirmation |
+| **BBANDS** | 10 | Volatility-based mean reversion signals |
+| **PRICE_ACTION** | 10 | Candlestick pattern recognition |
+| **ATR_STABILITY** | 10 | Market volatility context |
+
+### Advanced Configuration Examples
+
+#### 1. Trending Market Configuration
+```python
+TRENDING_WEIGHTS = {
+    "MACD": 25,         # Increased trend focus
+    "SMA_EMA": 20,      # Strong trend confirmation
+    "RSI": 10,          # Reduced momentum weight
+    "MTF": 15,          # Higher timeframe alignment
+    "BBANDS": 5,        # Reduced mean reversion
+    "STOCH": 10,
+    "PRICE_ACTION": 10,
+    "ATR_STABILITY": 5
+}
+```
+
+#### 2. Range-Bound Market Configuration
+```python
+RANGING_WEIGHTS = {
+    "RSI": 20,          # Increased momentum focus
+    "BBANDS": 20,       # Strong mean reversion signals
+    "STOCH": 15,        # Enhanced oscillator weight
+    "MACD": 10,         # Reduced trend weight
+    "SMA_EMA": 5,       # Minimal trend focus
+    "MTF": 10,
+    "PRICE_ACTION": 15, # Pattern recognition important
+    "ATR_STABILITY": 5
+}
+```
+
+#### 3. High Volatility Configuration
+```python
+VOLATILE_WEIGHTS = {
+    "ATR_STABILITY": 20,    # Volatility context crucial
+    "BBANDS": 15,           # Volatility-based signals
+    "RSI": 15,              # Momentum in volatile markets
+    "MACD": 15,             # Trend confirmation
+    "PRICE_ACTION": 15,     # Pattern reliability
+    "SMA_EMA": 10,
+    "MTF": 5,               # Reduced timeframe weight
+    "STOCH": 5
+}
+```
+
+### Dynamic Weight Adjustment
+
+#### Market Regime Detection
+```python
+def adjust_weights_for_market_regime(base_weights, market_conditions):
+    """
+    Dynamically adjust weights based on market conditions.
+    
+    Args:
+        base_weights: Default weight configuration
+        market_conditions: Dict with volatility, trend_strength, etc.
+    
+    Returns:
+        Adjusted weights dictionary
+    """
+    adjusted = base_weights.copy()
+    
+    # High volatility adjustment
+    if market_conditions.get('atr_ratio', 0) > 0.02:
+        adjusted['ATR_STABILITY'] *= 1.5
+        adjusted['BBANDS'] *= 1.3
+        adjusted['MACD'] *= 0.8
+    
+    # Strong trend adjustment
+    if market_conditions.get('trend_strength', 0) > 0.7:
+        adjusted['MACD'] *= 1.4
+        adjusted['SMA_EMA'] *= 1.3
+        adjusted['RSI'] *= 0.7
+    
+    # Range-bound adjustment
+    if market_conditions.get('trend_strength', 0) < 0.3:
+        adjusted['RSI'] *= 1.4
+        adjusted['BBANDS'] *= 1.3
+        adjusted['MACD'] *= 0.6
+    
+    return adjusted
+```
+
+### Threshold Configuration
+
+#### Dynamic Threshold Examples
+```python
+# Conservative (higher threshold = fewer signals)
+CONSERVATIVE_THRESHOLD = 75.0
+
+# Balanced (default)
+BALANCED_THRESHOLD = 60.0
+
+# Aggressive (lower threshold = more signals)
+AGGRESSIVE_THRESHOLD = 45.0
+
+# Market-specific thresholds
+FOREX_THRESHOLD = 55.0      # Currency pairs
+CRYPTO_THRESHOLD = 65.0     # Cryptocurrency
+STOCKS_THRESHOLD = 60.0     # Equity markets
+COMMODITIES_THRESHOLD = 70.0 # Commodity futures
+```
+
+### Customization Guidelines
+
+#### Weight Adjustment Principles
+1. **Total Weight Balance**: Maintain reasonable total weight (100-120 range)
+2. **Indicator Correlation**: Reduce weights for highly correlated indicators
+3. **Market Adaptation**: Adjust based on current market regime
+4. **Performance Feedback**: Use backtesting to optimize weights
+5. **Risk Management**: Higher weights for reliable, lower-risk indicators
+
+#### Performance Monitoring
+```python
+def evaluate_weight_performance(historical_signals, actual_outcomes):
+    """
+    Evaluate the performance of current weight configuration.
+    
+    Returns:
+        Dict with accuracy, precision, recall metrics per indicator
+    """
+    performance_metrics = {}
+    
+    for indicator in WEIGHTS.keys():
+        # Calculate indicator-specific performance
+        accuracy = calculate_accuracy(indicator, historical_signals, actual_outcomes)
+        precision = calculate_precision(indicator, historical_signals, actual_outcomes)
+        recall = calculate_recall(indicator, historical_signals, actual_outcomes)
+        
+        performance_metrics[indicator] = {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'suggested_weight': optimize_weight(accuracy, precision, recall)
+        }
+    
+    return performance_metrics
+```
 
 ## Testing
 

@@ -61,9 +61,10 @@ class SignalEngine:
         self.attempt_counts_by_symbol: Dict[str, int] = {}
         self.signal_counts_by_symbol: Dict[str, int] = {}
         
-        # Initialize adaptive threshold and filtering components
-        self.threshold_manager = ThresholdManagerFactory.create_conservative()
-        self.sanity_filter = SignalSanityFilterFactory.create_strict()
+        # Initialize adaptive threshold and filtering components with configuration
+        from .config import THRESHOLD_MANAGER_CONFIG, SANITY_FILTER_CONFIG
+        self.threshold_manager = ThresholdManagerFactory.create_from_config(THRESHOLD_MANAGER_CONFIG)
+        self.sanity_filter = SignalSanityFilterFactory.create_from_config(SANITY_FILTER_CONFIG["strict"])
         self.mtf_confirmation = MultiTimeframeConfirmation()
         self.debug = DEBUG_SIGNALS
 
@@ -138,6 +139,35 @@ class SignalEngine:
                         print(f"Signal logs - Insufficient data for {sym}; skipping.")
                         continue
 
+                    # Cache and compute H1 trend (per symbol) - MOVED BEFORE WEIGHTED VOTING
+                    h1_ts = h1_df.iloc[-1]["time"]
+                    cache_h1 = self.h1_cache_by_symbol.get(sym)
+                    if cache_h1 is None or str(cache_h1.get("ts")) != str(h1_ts):
+                        h1_dir = ema_trend_direction(h1_df, short_len=50, long_len=200)
+                        h1_atr_last, h1_atr_mean50 = atr_last_and_mean(
+                            h1_df,
+                            length=indicator_params.get("ATR", {}).get("length", 14),
+                            mean_window=50,
+                            params=indicator_params,
+                        )
+                        self.h1_cache_by_symbol[sym] = {
+                            "ts": h1_ts,
+                            "dir": h1_dir,
+                            "atr_last": h1_atr_last,
+                            "atr_mean50": h1_atr_mean50,
+                        }
+                    else:
+                        h1_dir = cache_h1["dir"]
+
+                    # Cache and compute H4 trend (per symbol) - MOVED BEFORE WEIGHTED VOTING
+                    h4_ts = h4_df.iloc[-1]["time"]
+                    cache_h4 = self.h4_cache_by_symbol.get(sym)
+                    if cache_h4 is None or str(cache_h4.get("ts")) != str(h4_ts):
+                        h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
+                        self.h4_cache_by_symbol[sym] = {"ts": h4_ts, "dir": h4_dir, "atr": atr_last(h4_df, params=indicator_params)}
+                    else:
+                        h4_dir = cache_h4["dir"]
+
                     # Compute primary indicators (M15)
                     ind = compute_indicators(m15_df, indicator_params)
                     res = evaluate_signals(m15_df, ind, indicator_params)
@@ -153,20 +183,47 @@ class SignalEngine:
                             label = getattr(indicator_result, 'label', 'N/A')
                             print(f"  {indicator_name}: {direction} | Vote: {vote} | Strength: {strength} | Label: {label} | Values: {values}")
                     
-                    # Compute weighted vote aggregation
-                    vote_result = compute_weighted_vote_aggregation(res, weights)
+                    # ENHANCED WEIGHTED VOTING SYSTEM WITH DYNAMIC THRESHOLD
+                    # Step 1: Calculate preliminary dynamic threshold for weighted voting decision mapping
+                    h1_atr_last = float(self.h1_cache_by_symbol[sym]["atr_last"])
+                    h1_atr_mean50 = float(self.h1_cache_by_symbol[sym]["atr_mean50"])
+                    atr_ratio = h1_atr_last / h1_atr_mean50 if h1_atr_mean50 > 0 else 1.0
                     
-                    # Debug: Log weighted vote aggregation results
+                    # RSI deviation from neutral (50)
+                    rsi_value = res["RSI"].value.get("rsi", 50.0)
+                    rsi_deviation = abs(rsi_value - 50.0) / 50.0  # Normalized 0-1
+                    
+                    # MACD histogram magnitude (normalized)
+                    macd_hist = res["MACD"].value.get("histogram", 0.0)
+                    macd_deviation = min(abs(macd_hist) * 1000, 1.0)  # Scale and cap at 1.0
+                    
+                    # Calculate preliminary adaptive threshold
+                    preliminary_threshold, threshold_metadata = self.threshold_manager.compute_adaptive_threshold(
+                        atr_ratio=atr_ratio,
+                        rsi_deviation=rsi_deviation,
+                        macd_histogram=macd_deviation,
+                        price_ma_deviation=0.0,
+                        symbol=sym,
+                        timeframe="M15"
+                    )
+                    
+                    # Step 2: Enhanced weighted vote aggregation with dynamic threshold
+                    vote_result = compute_weighted_vote_aggregation(res, weights, threshold=preliminary_threshold)
+                    
+                    # Debug: Log enhanced weighted vote aggregation results
                     if self.debug:
-                        print(f"DEBUG - Weighted Vote Aggregation for {sym}:")
+                        print(f"DEBUG - Enhanced Weighted Vote Aggregation for {sym}:")
+                        print(f"  Preliminary Threshold: {preliminary_threshold:.1f}%")
+                        print(f"  Weighted Score: {vote_result['weighted_score']:.3f}")
+                        print(f"  Normalized Score: {vote_result['normalized_score']:.1f}%")
                         print(f"  Final Direction: {vote_result['final_direction']}")
-                        print(f"  Vote Score: {vote_result['total_vote_score']:.3f}")
+                        print(f"  Signal Strength: {vote_result['signal_strength']:.1f}%")
                         print(f"  Confidence: {vote_result['confidence']:.3f}")
                         print(f"  Strong Signals: {vote_result['strong_signals']}")
                         print(f"  Weak Signals: {vote_result['weak_signals']}")
                         print(f"  Vote Breakdown:")
                         for ind_name, breakdown in vote_result['vote_breakdown'].items():
-                            print(f"    {ind_name}: vote={breakdown['vote']}, contribution={breakdown['contribution']:.3f}")
+                            print(f"    {ind_name}: vote={breakdown['vote']}, effective_vote={breakdown['effective_vote']}, contribution={breakdown['contribution']:.3f}")
                     
                     strat = compute_strategy_strength(res, weights)
                     
@@ -274,34 +331,7 @@ class SignalEngine:
                         )
                         continue
 
-                    # Cache and compute H1 trend (per symbol)
-                    h1_ts = h1_df.iloc[-1]["time"]
-                    cache_h1 = self.h1_cache_by_symbol.get(sym)
-                    if cache_h1 is None or str(cache_h1.get("ts")) != str(h1_ts):
-                        h1_dir = ema_trend_direction(h1_df, short_len=50, long_len=200)
-                        h1_atr_last, h1_atr_mean50 = atr_last_and_mean(
-                            h1_df,
-                            length=indicator_params.get("ATR", {}).get("length", 14),
-                            mean_window=50,
-                            params=indicator_params,
-                        )
-                        self.h1_cache_by_symbol[sym] = {
-                            "ts": h1_ts,
-                            "dir": h1_dir,
-                            "atr_last": h1_atr_last,
-                            "atr_mean50": h1_atr_mean50,
-                        }
-                    else:
-                        h1_dir = cache_h1["dir"]
-
-                    # Cache and compute H4 trend (per symbol)
-                    h4_ts = h4_df.iloc[-1]["time"]
-                    cache_h4 = self.h4_cache_by_symbol.get(sym)
-                    if cache_h4 is None or str(cache_h4.get("ts")) != str(h4_ts):
-                        h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
-                        self.h4_cache_by_symbol[sym] = {"ts": h4_ts, "dir": h4_dir, "atr": atr_last(h4_df, params=indicator_params)}
-                    else:
-                        h4_dir = cache_h4["dir"]
+                    # Cache population moved earlier in the flow before weighted voting system
 
                     # Validate M15 signal with H1 direction
                     m15_side = best["direction"]
@@ -425,26 +455,21 @@ class SignalEngine:
                     # Determine confidence zone
                     confidence_zone = get_signal_confidence_zone(final_strength)
                     
-                    # DYNAMIC THRESHOLD CALCULATION WITH WEIGHTED VOTES
-                    # Calculate market condition factors for dynamic threshold
-                    atr_ratio = h1_atr_last / h1_atr_mean50 if h1_atr_mean50 > 0 else 1.0
+                    # REFINED DYNAMIC THRESHOLD WITH ENHANCED WEIGHTED VOTES
+                    # Use market conditions already calculated above
+                    market_conditions = {
+                        'atr_ratio': atr_ratio,
+                        'rsi_deviation': rsi_deviation,
+                        'macd_histogram': macd_deviation,
+                        'price_ma_deviation': 0.0
+                    }
                     
-                    # RSI deviation from neutral (50)
-                    rsi_value = res["RSI"].value.get("rsi", 50.0)
-                    rsi_deviation = abs(rsi_value - 50.0) / 50.0  # Normalized 0-1
-                    
-                    # MACD histogram magnitude (normalized)
-                    macd_hist = res["MACD"].value.get("histogram", 0.0)
-                    macd_deviation = min(abs(macd_hist) * 1000, 1.0)  # Scale and cap at 1.0
-                    
-                    # Compute dynamic threshold with weighted vote integration
-                    dynamic_threshold, threshold_metadata = self.threshold_manager.compute_dynamic_threshold_with_votes(
+                    # Refine threshold with enhanced vote result integration
+                    dynamic_threshold, refined_threshold_metadata = self.threshold_manager.compute_dynamic_threshold_with_votes(
                         vote_result=vote_result,
+                        market_conditions=market_conditions,
                         symbol=sym,
-                        timeframe="M15",
-                        atr_ratio=atr_ratio,
-                        rsi_deviation=rsi_deviation,
-                        macd_histogram=macd_deviation
+                        timeframe="M15"
                     )
                     
                     # Store comprehensive threshold factors for database
@@ -453,9 +478,12 @@ class SignalEngine:
                         "rsi_deviation": rsi_deviation,
                         "macd_deviation": macd_deviation,
                         "base_threshold": self.threshold_manager.base_threshold,
-                        "computed_threshold": dynamic_threshold,
-                        "vote_integration": threshold_metadata.get("vote_adjustments", {}),
-                        "threshold_metadata": threshold_metadata
+                        "preliminary_threshold": preliminary_threshold,
+                        "final_threshold": dynamic_threshold,
+                        "preliminary_metadata": threshold_metadata,
+                        "refined_metadata": refined_threshold_metadata,
+                        "vote_integration": refined_threshold_metadata.get("vote_adjustments", {}),
+                        "enhanced_voting_used": True
                     }
                     
                     # SANITY FILTER CHECK
@@ -467,11 +495,19 @@ class SignalEngine:
                         "close": float(m15_df.iloc[-1]["close"])
                     }
                     
-                    # Apply sanity filter
-                    sanity_passed, filter_reason = self.sanity_filter.validate(
+                    # Apply sanity filter with enhanced validation
+                    sanity_passed, filter_reason, validation_metadata = self.sanity_filter.validate_signal(
                         candle=last_candle,
                         atr=h1_atr_last,
-                        direction_confidence=final_strength
+                        direction_confidence=final_strength,
+                        signal_strength=final_strength,
+                        symbol=sym,
+                        additional_data={
+                            'signal_direction': m15_side,
+                            'h1_alignment': aligns_h1,
+                            'volatility_regime': 'extreme' if extreme_vol else 'normal',
+                            'atr_ratio': h1_atr_last / h1_atr_mean50 if h1_atr_mean50 > 0 else 0
+                        }
                     )
                     
                     # Two-tiered confidence filtering - initialize variables for all paths
@@ -738,8 +774,8 @@ class SignalEngine:
                 ind = compute_indicators(m15_df, indicator_params)
                 res = evaluate_signals(m15_df, ind, indicator_params)
                 
-                # Compute weighted vote aggregation
-                vote_result = compute_weighted_vote_aggregation(res, weights)
+                # Compute weighted vote aggregation (using base threshold for this simplified path)
+                vote_result = compute_weighted_vote_aggregation(res, weights, threshold=self.threshold_manager.base_threshold)
                 
                 strat = compute_strategy_strength(res, weights)
                 best = best_signal(strat)

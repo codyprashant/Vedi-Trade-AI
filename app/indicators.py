@@ -543,34 +543,50 @@ def get_signal_confidence_zone(strength: float) -> str:
     return "neutral"
 
 
-def compute_weighted_vote_aggregation(results: Dict[str, IndicatorResult], weights: Dict[str, float] | None = None) -> Dict[str, any]:
+def compute_weighted_vote_aggregation(results: Dict[str, IndicatorResult], weights: Dict[str, float] | None = None, threshold: float = 60.0) -> Dict[str, any]:
     """
-    Aggregate indicator votes using a weighted voting system.
+    Enhanced weighted voting system with normalized score calculation and dynamic threshold decision mapping.
+    
+    Implements the specification:
+    - Each indicator contributes a weighted vote (-1, 0, +1) with signal strength
+    - Weighted aggregation: sum(weight * indicator_vote) for each indicator
+    - Normalized score: (weighted_score / max_possible) * 100 (-100 to +100 scale)
+    - Decision mapping: ≥+Threshold=BUY, ≤-Threshold=SELL, otherwise=NEUTRAL
     
     Args:
         results: Dictionary of indicator results with vote/strength/label fields
-        weights: Optional weights for each indicator (defaults to equal weights)
+        weights: Optional weights for each indicator (defaults from DB: MTF:10, RSI:15, MACD:20, etc.)
+        threshold: Dynamic threshold for BUY/SELL decisions (default: 60.0)
     
     Returns:
-        Dictionary containing aggregated vote results with detailed breakdown
+        Dictionary containing enhanced aggregated vote results with detailed breakdown
     """
     if not results:
         return {
-            "total_vote_score": 0.0,
+            "weighted_score": 0.0,
+            "normalized_score": 0.0,
             "final_direction": "neutral",
+            "signal_strength": 0.0,
             "confidence": 0.0,
             "vote_breakdown": {},
             "indicator_count": 0,
             "strong_signals": 0,
-            "weak_signals": 0
+            "weak_signals": 0,
+            "max_possible_score": 0.0,
+            "threshold_used": threshold
         }
     
-    # Default equal weights if not provided
+    # Default weights per specification: {"MTF":10,"RSI":15,"MACD":20,"STOCH":10,"BBANDS":10,"SMA_EMA":15,"PRICE_ACTION":10,"ATR_STABILITY":10}
     if weights is None:
-        weights = {name: 1.0 for name in results.keys()}
+        weights = {
+            "MTF": 10, "RSI": 15, "MACD": 20, "STOCH": 10, "BBANDS": 10,
+            "SMA_EMA": 15, "PRICE_ACTION": 10, "ATR_STABILITY": 10,
+            # Fallback for individual SMA/EMA indicators
+            "SMA": 7.5, "EMA": 7.5
+        }
     
-    total_weighted_vote = 0.0
-    total_weight = 0.0
+    weighted_score = 0.0
+    max_possible_score = 0.0
     vote_breakdown = {}
     strong_signals = 0
     weak_signals = 0
@@ -591,63 +607,77 @@ def compute_weighted_vote_aggregation(results: Dict[str, IndicatorResult], weigh
         # Get weight for this indicator
         indicator_weight = weights.get(indicator_name, 1.0)
         
-        # Calculate weighted contribution
-        # Strong signals get full weight, weak signals get reduced weight
-        strength_multiplier = 1.0 if label == 'strong' else 0.6
-        weighted_contribution = vote * strength * indicator_weight * strength_multiplier
+        # Enhanced weighted contribution calculation per specification
+        # Vote scale: Strong Buy (+1.0), Weak Buy (+0.5), Neutral (0.0), Weak Sell (-0.5), Strong Sell (-1.0)
+        vote_value = float(vote)  # -1, 0, or +1
         
-        total_weighted_vote += weighted_contribution
-        total_weight += indicator_weight
-        
-        # Track signal types
+        # Apply strength scaling: strong signals get full vote, weak signals get partial vote
         if label == 'strong':
+            effective_vote = vote_value  # Full vote weight
             strong_signals += 1
         elif label == 'weak':
+            effective_vote = vote_value * 0.5  # Partial vote weight (Weak Buy/Sell)
             weak_signals += 1
-            
-        # Store breakdown for debugging
+        else:
+            effective_vote = 0.0  # Neutral
+        
+        # Calculate weighted contribution: weight * indicator_vote
+        weighted_contribution = indicator_weight * effective_vote
+        weighted_score += weighted_contribution
+        
+        # Track maximum possible score for normalization
+        max_possible_score += abs(indicator_weight)
+        
+        # Store detailed breakdown for debugging and transparency
         vote_breakdown[indicator_name] = {
             "vote": vote,
+            "effective_vote": effective_vote,
             "strength": strength,
             "label": label,
             "weight": indicator_weight,
             "contribution": weighted_contribution
         }
     
-    # Calculate final metrics
-    if total_weight > 0:
-        normalized_vote_score = total_weighted_vote / total_weight
+    # Calculate normalized score: (weighted_score / max_possible) * 100
+    if max_possible_score > 0:
+        normalized_score = (weighted_score / max_possible_score) * 100.0
     else:
-        normalized_vote_score = 0.0
+        normalized_score = 0.0
     
-    # Determine final direction based on vote score
-    if normalized_vote_score > 0.1:
+    # Enhanced decision mapping per specification
+    if normalized_score >= threshold:
         final_direction = "buy"
-    elif normalized_vote_score < -0.1:
+        signal_strength = normalized_score
+    elif normalized_score <= -threshold:
         final_direction = "sell"
+        signal_strength = abs(normalized_score)
     else:
         final_direction = "neutral"
+        signal_strength = 0.0
     
-    # Calculate confidence based on absolute vote score and signal consensus
-    confidence = min(abs(normalized_vote_score), 1.0)
+    # Enhanced confidence calculation
+    confidence = min(abs(normalized_score) / 100.0, 1.0)
     
-    # Boost confidence if we have strong signal consensus
+    # Boost confidence for strong signal consensus
     if strong_signals >= 2:
-        confidence *= 1.2
+        confidence = min(confidence * 1.2, 1.0)
     elif strong_signals == 1 and weak_signals >= 2:
-        confidence *= 1.1
-    
-    # Cap confidence at 1.0
-    confidence = min(confidence, 1.0)
+        confidence = min(confidence * 1.1, 1.0)
     
     return {
-        "total_vote_score": normalized_vote_score,
+        "weighted_score": weighted_score,
+        "normalized_score": normalized_score,
         "final_direction": final_direction,
+        "signal_strength": signal_strength,
         "confidence": confidence,
         "vote_breakdown": vote_breakdown,
         "indicator_count": len([r for r in results.values() if r is not None and hasattr(r, 'vote') and getattr(r, 'vote', None) is not None]),
         "strong_signals": strong_signals,
-        "weak_signals": weak_signals
+        "weak_signals": weak_signals,
+        "max_possible_score": max_possible_score,
+        "threshold_used": threshold,
+        # Backward compatibility
+        "total_vote_score": normalized_score / 100.0  # Convert back to -1 to +1 scale for compatibility
     }
 
 

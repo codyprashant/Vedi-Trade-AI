@@ -78,5 +78,96 @@ PRICE_ACTION_BONUS = 5      # Bonus when price action aligns with final directio
 DEBUG_WEBSOCKET = False  # Set to True to enable detailed WebSocket debug logs
 DEBUG_SIGNALS = False    # Set to True to enable detailed signal processing logs
 
+# Adaptive Threshold Manager Configuration
+THRESHOLD_MANAGER_CONFIG = {
+    "base_threshold": 60.0,
+    "atr_factor": 1.5,
+    "min_threshold": 45.0,
+    "max_threshold": 85.0,
+    "volatility_weight": 0.4,
+    "momentum_weight": 0.3,
+    "trend_weight": 0.3,
+    # Enhanced volatility regime classification
+    "volatility_regime_thresholds": {
+        "low": 0.8,      # ATR ratio < 0.8 = low volatility
+        "normal": 1.5,   # 0.8 <= ATR ratio < 1.5 = normal volatility
+        "high": 2.0,     # 1.5 <= ATR ratio < 2.0 = high volatility
+        # ATR ratio >= 2.0 = extreme volatility
+    },
+    "stress_detection_enabled": True,
+    "adaptive_parameters": True  # Enable dynamic weight adjustment based on market regime
+}
+
+# Enhanced Sanity Filter Configuration
+SANITY_FILTER_CONFIG = {
+    "strict": {
+        "min_volatility": 0.002,
+        "min_body_ratio": 0.6,
+        "min_confidence": 65.0,
+        "min_volume_ratio": 1.0,
+        "max_spread_ratio": 0.03,
+        "enable_candle_pattern_filter": True,
+        "enable_volatility_filter": True,
+        "enable_confidence_filter": True,
+        # Enhanced ATR validation
+        "atr_volatility_thresholds": {
+            "very_low": 0.0005,  # 0.05%
+            "low": 0.7,
+            "normal": 1.8,
+            "high": 3.0
+        },
+        "enable_atr_regime_validation": True,
+        # Enhanced candle body validation
+        "body_ratio_thresholds": {
+            "doji": 0.1,
+            "weak": 0.3,
+            "moderate": 0.5,
+            "strong": 0.7
+        },
+        "enable_dynamic_body_validation": True,
+        "max_wick_to_body_ratio": 4.0,
+        "min_directional_body_ratio": 0.4
+    },
+    "permissive": {
+        "min_volatility": 0.001,
+        "min_body_ratio": 0.3,
+        "min_confidence": 50.0,
+        "min_volume_ratio": 0.7,
+        "max_spread_ratio": 0.06,
+        "enable_candle_pattern_filter": True,
+        "enable_volatility_filter": True,
+        "enable_confidence_filter": True,
+        # Enhanced ATR validation
+        "atr_volatility_thresholds": {
+            "very_low": 0.0003,  # 0.03%
+            "low": 0.5,
+            "normal": 2.0,
+            "high": 4.0
+        },
+        "enable_atr_regime_validation": True,
+        # Enhanced candle body validation
+        "body_ratio_thresholds": {
+            "doji": 0.08,
+            "weak": 0.2,
+            "moderate": 0.4,
+            "strong": 0.6
+        },
+        "enable_dynamic_body_validation": True,
+        "max_wick_to_body_ratio": 6.0,
+        "min_directional_body_ratio": 0.25
+    }
+}
+
+# Weighted Voting System Configuration
+WEIGHTED_VOTING_CONFIG = {
+    "enable_normalized_scoring": True,
+    "confidence_weight": 0.3,
+    "strength_weight": 0.4,
+    "consensus_weight": 0.3,
+    "threshold_adjustment_factor": 0.15,  # How much vote quality affects threshold
+    "min_consensus_ratio": 0.6,  # Minimum ratio for strong consensus
+    "weak_signal_penalty": 0.5   # Penalty factor for weak signals
+}
+
 # Supabase
 SUPABASE_TABLE = "signals"

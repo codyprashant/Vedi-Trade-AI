@@ -26,7 +26,10 @@ class ThresholdManager:
                  max_threshold: float = 75.0,
                  volatility_weight: float = 1.0,
                  momentum_weight: float = 1.0,
-                 trend_weight: float = 0.8):
+                 trend_weight: float = 0.8,
+                 volatility_regime_thresholds: Dict[str, float] = None,
+                 stress_detection_enabled: bool = True,
+                 adaptive_parameters: bool = True):
         """
         Initialize ThresholdManager with configurable parameters.
         
@@ -38,6 +41,9 @@ class ThresholdManager:
             volatility_weight: Weight for volatility-based adjustments
             momentum_weight: Weight for momentum-based adjustments
             trend_weight: Weight for trend-based adjustments
+            volatility_regime_thresholds: Custom thresholds for volatility regimes
+            stress_detection_enabled: Enable market stress detection
+            adaptive_parameters: Enable dynamic parameter adjustment
         """
         self.base_threshold = base_threshold
         self.atr_factor = atr_factor
@@ -46,9 +52,128 @@ class ThresholdManager:
         self.volatility_weight = volatility_weight
         self.momentum_weight = momentum_weight
         self.trend_weight = trend_weight
+        self.stress_detection_enabled = stress_detection_enabled
+        self.adaptive_parameters = adaptive_parameters
+        
+        # Enhanced volatility regime thresholds
+        self.volatility_regimes = volatility_regime_thresholds or {
+            'low': 0.7,      # ATR ratio < 0.7 = Low volatility
+            'normal_low': 1.0,   # 0.7 <= ATR ratio < 1.0 = Normal-Low
+            'normal_high': 1.5,  # 1.0 <= ATR ratio < 1.5 = Normal-High
+            'high': 2.0,     # 1.5 <= ATR ratio < 2.0 = High volatility
+            'extreme': 3.0   # ATR ratio >= 2.0 = Extreme volatility
+        }
         
         logger.info(f"ThresholdManager initialized: base={base_threshold}, "
-                   f"range=[{min_threshold}, {max_threshold}], atr_factor={atr_factor}")
+                   f"atr_factor={atr_factor}, range=[{min_threshold}, {max_threshold}], "
+                   f"stress_detection={stress_detection_enabled}, adaptive={adaptive_parameters}")
+    
+    def classify_volatility_regime(self, atr_ratio: float) -> Tuple[str, Dict[str, Any]]:
+        """
+        Classify current volatility regime based on ATR ratio.
+        
+        Args:
+            atr_ratio: Current ATR ratio (current ATR / historical average)
+            
+        Returns:
+            Tuple of (regime_name, regime_metadata)
+        """
+        if atr_ratio < self.volatility_regimes['low']:
+            regime = 'low'
+            description = 'Low volatility - Markets are calm, tighten thresholds'
+            adjustment_factor = 1.2  # Increase adjustments in low vol
+        elif atr_ratio < self.volatility_regimes['normal_low']:
+            regime = 'normal_low'
+            description = 'Normal-Low volatility - Slightly below average'
+            adjustment_factor = 1.0
+        elif atr_ratio < self.volatility_regimes['normal_high']:
+            regime = 'normal_high'
+            description = 'Normal-High volatility - Slightly above average'
+            adjustment_factor = 1.0
+        elif atr_ratio < self.volatility_regimes['high']:
+            regime = 'high'
+            description = 'High volatility - Markets are active, loosen thresholds'
+            adjustment_factor = 0.8  # Reduce adjustments in high vol
+        else:
+            regime = 'extreme'
+            description = 'Extreme volatility - Markets are stressed, significantly loosen thresholds'
+            adjustment_factor = 0.6  # Further reduce adjustments in extreme vol
+        
+        metadata = {
+            'regime': regime,
+            'atr_ratio': atr_ratio,
+            'description': description,
+            'adjustment_factor': adjustment_factor,
+            'thresholds': self.volatility_regimes
+        }
+        
+        return regime, metadata
+    
+    def detect_market_stress(self, market_conditions: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Detect market stress conditions using multiple indicators.
+        
+        Args:
+            market_conditions: Dict containing market data
+            
+        Returns:
+            Tuple of (is_stressed, stress_metadata)
+        """
+        if not self.stress_detection_enabled:
+            return False, {'stress_detection_disabled': True}
+        
+        stress_indicators = {}
+        stress_score = 0.0
+        
+        # ATR-based stress (extreme volatility)
+        atr_ratio = market_conditions.get('atr_ratio', 1.0)
+        if atr_ratio > self.volatility_regimes['extreme']:
+            stress_indicators['extreme_volatility'] = True
+            stress_score += 3.0
+        elif atr_ratio > self.volatility_regimes['high']:
+            stress_indicators['high_volatility'] = True
+            stress_score += 1.5
+        
+        # RSI-based stress (extreme overbought/oversold)
+        rsi_deviation = market_conditions.get('rsi_deviation', 0.0)
+        if rsi_deviation > 0.8:  # RSI > 90 or < 10
+            stress_indicators['extreme_rsi'] = True
+            stress_score += 2.0
+        elif rsi_deviation > 0.6:  # RSI > 80 or < 20
+            stress_indicators['high_rsi'] = True
+            stress_score += 1.0
+        
+        # MACD-based stress (extreme histogram values)
+        macd_deviation = market_conditions.get('macd_histogram', 0.0)
+        if macd_deviation > 0.8:
+            stress_indicators['extreme_macd'] = True
+            stress_score += 1.5
+        elif macd_deviation > 0.5:
+            stress_indicators['high_macd'] = True
+            stress_score += 0.5
+        
+        # Price deviation stress (far from moving averages)
+        price_ma_deviation = abs(market_conditions.get('price_ma_deviation', 0.0))
+        if price_ma_deviation > 5.0:  # > 5% from MAs
+            stress_indicators['extreme_price_deviation'] = True
+            stress_score += 2.0
+        elif price_ma_deviation > 3.0:  # > 3% from MAs
+            stress_indicators['high_price_deviation'] = True
+            stress_score += 1.0
+        
+        # Determine stress level
+        is_stressed = stress_score >= 3.0  # Threshold for market stress
+        stress_level = 'extreme' if stress_score >= 5.0 else 'high' if stress_score >= 3.0 else 'normal'
+        
+        stress_metadata = {
+            'is_stressed': is_stressed,
+            'stress_score': stress_score,
+            'stress_level': stress_level,
+            'indicators': stress_indicators,
+            'recommendation': 'Loosen thresholds significantly' if is_stressed else 'Normal threshold operation'
+        }
+        
+        return is_stressed, stress_metadata
     
     def compute_adaptive_threshold(self, 
                                  atr_ratio: float,
@@ -72,16 +197,47 @@ class ThresholdManager:
             Tuple of (adaptive_threshold, metadata_dict)
         """
         try:
-            # Calculate individual adjustment components
-            volatility_adj = self._calculate_volatility_adjustment(atr_ratio)
+            # Prepare market conditions for enhanced volatility analysis
+            market_conditions = {
+                'atr_ratio': atr_ratio,
+                'rsi_deviation': rsi_deviation,
+                'macd_histogram': macd_histogram,
+                'price_ma_deviation': price_ma_deviation
+            }
+            
+            # Calculate individual adjustment components with enhanced volatility analysis
+            volatility_adj, volatility_metadata = self._calculate_volatility_adjustment(atr_ratio, market_conditions)
             momentum_adj = self._calculate_momentum_adjustment(rsi_deviation, macd_histogram)
             trend_adj = self._calculate_trend_adjustment(price_ma_deviation)
             
-            # Combine adjustments with weights
+            # Apply adaptive parameter adjustment if enabled
+            if self.adaptive_parameters:
+                # Adjust weights based on volatility regime
+                vol_regime = volatility_metadata['volatility_regime']['regime']
+                if vol_regime in ['low', 'normal_low']:
+                    # In low volatility, give more weight to momentum and trend
+                    effective_vol_weight = self.volatility_weight * 0.8
+                    effective_momentum_weight = self.momentum_weight * 1.2
+                    effective_trend_weight = self.trend_weight * 1.1
+                elif vol_regime in ['high', 'extreme']:
+                    # In high volatility, prioritize volatility adjustments
+                    effective_vol_weight = self.volatility_weight * 1.3
+                    effective_momentum_weight = self.momentum_weight * 0.9
+                    effective_trend_weight = self.trend_weight * 0.8
+                else:  # normal_high
+                    effective_vol_weight = self.volatility_weight
+                    effective_momentum_weight = self.momentum_weight
+                    effective_trend_weight = self.trend_weight
+            else:
+                effective_vol_weight = self.volatility_weight
+                effective_momentum_weight = self.momentum_weight
+                effective_trend_weight = self.trend_weight
+            
+            # Combine adjustments with adaptive weights
             total_adjustment = (
-                volatility_adj * self.volatility_weight +
-                momentum_adj * self.momentum_weight +
-                trend_adj * self.trend_weight
+                volatility_adj * effective_vol_weight +
+                momentum_adj * effective_momentum_weight +
+                trend_adj * effective_trend_weight
             )
             
             # Apply adjustment to base threshold
@@ -91,7 +247,7 @@ class ThresholdManager:
             clamped_threshold = max(self.min_threshold, 
                                   min(self.max_threshold, adaptive_threshold))
             
-            # Create metadata for transparency
+            # Create comprehensive metadata for transparency
             metadata = {
                 "base_threshold": self.base_threshold,
                 "volatility_adjustment": volatility_adj,
@@ -103,6 +259,12 @@ class ThresholdManager:
                 "was_clamped": clamped_threshold != adaptive_threshold,
                 "atr_ratio": atr_ratio,
                 "rsi_deviation": rsi_deviation,
+                "enhanced_volatility_analysis": volatility_metadata,
+                "adaptive_weights": {
+                    "volatility": effective_vol_weight,
+                    "momentum": effective_momentum_weight,
+                    "trend": effective_trend_weight
+                } if self.adaptive_parameters else None,
                 "macd_histogram": macd_histogram,
                 "price_ma_deviation": price_ma_deviation,
                 "symbol": symbol,
@@ -126,27 +288,69 @@ class ThresholdManager:
             }
             return self.base_threshold, fallback_metadata
     
-    def _calculate_volatility_adjustment(self, atr_ratio: float) -> float:
+    def _calculate_volatility_adjustment(self, atr_ratio: float, market_conditions: Dict[str, Any] = None) -> Tuple[float, Dict[str, Any]]:
         """
-        Calculate threshold adjustment based on volatility.
+        Enhanced volatility adjustment calculation using regime classification.
         
-        During low volatility → tighten thresholds (positive adjustment)
-        During high volatility → loosen thresholds (negative adjustment)
+        Args:
+            atr_ratio: Current ATR ratio
+            market_conditions: Optional market conditions for stress detection
+            
+        Returns:
+            Tuple of (adjustment, adjustment_metadata)
         """
-        # Normalize ATR ratio (typical range: 0.001-0.010)
+        # Classify volatility regime
+        regime, regime_metadata = self.classify_volatility_regime(atr_ratio)
+        
+        # Detect market stress if conditions provided
+        is_stressed = False
+        stress_metadata = {}
+        if market_conditions and self.stress_detection_enabled:
+            is_stressed, stress_metadata = self.detect_market_stress(market_conditions)
+        
+        # Base adjustment calculation
         normalized_atr = atr_ratio / self.atr_factor
         
-        # Low volatility (< 1.0) → tighten by up to +5%
-        # High volatility (> 1.0) → loosen by up to -5%
-        if normalized_atr < 1.0:
-            # Tighten threshold for low volatility
-            adjustment = (1.0 - normalized_atr) * 5.0
-        else:
-            # Loosen threshold for high volatility
-            adjustment = -(normalized_atr - 1.0) * 3.0
+        # Regime-based adjustments
+        if regime == 'low':
+            # Low volatility → tighten thresholds significantly
+            base_adjustment = (1.0 - normalized_atr) * 6.0  # Up to +6%
+        elif regime == 'normal_low':
+            # Normal-low volatility → slight tightening
+            base_adjustment = (1.0 - normalized_atr) * 3.0  # Up to +3%
+        elif regime == 'normal_high':
+            # Normal-high volatility → slight loosening
+            base_adjustment = -(normalized_atr - 1.0) * 2.0  # Up to -2%
+        elif regime == 'high':
+            # High volatility → moderate loosening
+            base_adjustment = -(normalized_atr - 1.0) * 4.0  # Up to -4%
+        else:  # extreme
+            # Extreme volatility → significant loosening
+            base_adjustment = -(normalized_atr - 1.0) * 6.0  # Up to -6%
         
-        # Cap adjustment at ±8%
-        return max(-8.0, min(8.0, adjustment))
+        # Apply regime adjustment factor
+        adjustment = base_adjustment * regime_metadata['adjustment_factor']
+        
+        # Market stress modifier
+        if is_stressed:
+            stress_modifier = -2.0 if stress_metadata['stress_level'] == 'extreme' else -1.0
+            adjustment += stress_modifier
+        
+        # Cap adjustment at enhanced range ±10%
+        final_adjustment = max(-10.0, min(10.0, adjustment))
+        
+        # Create comprehensive metadata
+        adjustment_metadata = {
+            'base_adjustment': base_adjustment,
+            'regime_factor': regime_metadata['adjustment_factor'],
+            'stress_modifier': stress_modifier if is_stressed else 0.0,
+            'final_adjustment': final_adjustment,
+            'volatility_regime': regime_metadata,
+            'market_stress': stress_metadata,
+            'was_capped': final_adjustment != adjustment
+        }
+        
+        return final_adjustment, adjustment_metadata
     
     def _calculate_momentum_adjustment(self, rsi_deviation: float, macd_histogram: float) -> float:
         """
