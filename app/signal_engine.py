@@ -36,6 +36,7 @@ from .indicators import (
     atr_last,
     atr_last_and_mean,
     price_action_direction,
+    compute_weighted_vote_aggregation,
 )
 from .db import insert_signal
 from .db import insert_indicator_snapshot
@@ -147,7 +148,25 @@ class SignalEngine:
                         for indicator_name, indicator_result in res.items():
                             direction = indicator_result.direction
                             values = indicator_result.value
-                            print(f"  {indicator_name}: {direction} | Values: {values}")
+                            vote = getattr(indicator_result, 'vote', 'N/A')
+                            strength = getattr(indicator_result, 'strength', 'N/A')
+                            label = getattr(indicator_result, 'label', 'N/A')
+                            print(f"  {indicator_name}: {direction} | Vote: {vote} | Strength: {strength} | Label: {label} | Values: {values}")
+                    
+                    # Compute weighted vote aggregation
+                    vote_result = compute_weighted_vote_aggregation(res, weights)
+                    
+                    # Debug: Log weighted vote aggregation results
+                    if self.debug:
+                        print(f"DEBUG - Weighted Vote Aggregation for {sym}:")
+                        print(f"  Final Direction: {vote_result['final_direction']}")
+                        print(f"  Vote Score: {vote_result['total_vote_score']:.3f}")
+                        print(f"  Confidence: {vote_result['confidence']:.3f}")
+                        print(f"  Strong Signals: {vote_result['strong_signals']}")
+                        print(f"  Weak Signals: {vote_result['weak_signals']}")
+                        print(f"  Vote Breakdown:")
+                        for ind_name, breakdown in vote_result['vote_breakdown'].items():
+                            print(f"    {ind_name}: vote={breakdown['vote']}, contribution={breakdown['contribution']:.3f}")
                     
                     strat = compute_strategy_strength(res, weights)
                     
@@ -221,17 +240,26 @@ class SignalEngine:
                         freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
                         freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
                         
-                        # Enhanced base_strength calculation with fallbacks
-                        if best and "strength" in best:
+                        # Enhanced base_strength calculation with weighted vote integration and fallbacks
+                        base_strength = None
+                        
+                        # Primary: Use weighted vote confidence if available
+                        if vote_result and vote_result.get('confidence') is not None:
+                            base_strength = vote_result['confidence'] * 100.0  # Convert to percentage
+                        
+                        # Secondary: Use best signal strength
+                        elif best and "strength" in best and best["strength"] is not None:
                             base_strength = best["strength"]
+                        
+                        # Tertiary: Calculate from available strategy data
                         elif best:
-                            # Fallback: calculate from available strategy data
                             base_strength = 0.0
                             for strategy_name, strategy_data in best.get("components", {}).items():
-                                if isinstance(strategy_data, dict) and "strength" in strategy_data:
+                                if isinstance(strategy_data, dict) and "strength" in strategy_data and strategy_data["strength"] is not None:
                                     base_strength = max(base_strength, strategy_data["strength"])
-                        else:
-                            # Ultimate fallback: return neutral strength instead of None
+                        
+                        # Ultimate fallback: return neutral strength instead of None
+                        if base_strength is None:
                             base_strength = 0.0
                         print(
                             f"Signal logs - Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
@@ -397,7 +425,7 @@ class SignalEngine:
                     # Determine confidence zone
                     confidence_zone = get_signal_confidence_zone(final_strength)
                     
-                    # ADAPTIVE THRESHOLD CALCULATION
+                    # DYNAMIC THRESHOLD CALCULATION WITH WEIGHTED VOTES
                     # Calculate market condition factors for dynamic threshold
                     atr_ratio = h1_atr_last / h1_atr_mean50 if h1_atr_mean50 > 0 else 1.0
                     
@@ -409,20 +437,25 @@ class SignalEngine:
                     macd_hist = res["MACD"].value.get("histogram", 0.0)
                     macd_deviation = min(abs(macd_hist) * 1000, 1.0)  # Scale and cap at 1.0
                     
-                    # Compute adaptive threshold
-                    dynamic_threshold = self.threshold_manager.compute_adaptive_threshold(
+                    # Compute dynamic threshold with weighted vote integration
+                    dynamic_threshold, threshold_metadata = self.threshold_manager.compute_dynamic_threshold_with_votes(
+                        vote_result=vote_result,
+                        symbol=sym,
+                        timeframe="M15",
                         atr_ratio=atr_ratio,
                         rsi_deviation=rsi_deviation,
                         macd_histogram=macd_deviation
                     )
                     
-                    # Store threshold factors for database
+                    # Store comprehensive threshold factors for database
                     threshold_factors = {
                         "atr_ratio": atr_ratio,
                         "rsi_deviation": rsi_deviation,
                         "macd_deviation": macd_deviation,
                         "base_threshold": self.threshold_manager.base_threshold,
-                        "computed_threshold": dynamic_threshold
+                        "computed_threshold": dynamic_threshold,
+                        "vote_integration": threshold_metadata.get("vote_adjustments", {}),
+                        "threshold_metadata": threshold_metadata
                     }
                     
                     # SANITY FILTER CHECK
@@ -704,6 +737,10 @@ class SignalEngine:
                 # Compute primary indicators (M15)
                 ind = compute_indicators(m15_df, indicator_params)
                 res = evaluate_signals(m15_df, ind, indicator_params)
+                
+                # Compute weighted vote aggregation
+                vote_result = compute_weighted_vote_aggregation(res, weights)
+                
                 strat = compute_strategy_strength(res, weights)
                 best = best_signal(strat)
                 ts = pd.to_datetime(m15_df.iloc[-1]["time"]).isoformat()
@@ -753,17 +790,26 @@ class SignalEngine:
                     freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
                     freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
                     
-                    # Enhanced base_strength calculation with fallbacks
-                    if best and "strength" in best:
+                    # Enhanced base_strength calculation with weighted vote integration and fallbacks
+                    base_strength = None
+                    
+                    # Primary: Use weighted vote confidence if available
+                    if vote_result and vote_result.get('confidence') is not None:
+                        base_strength = vote_result['confidence'] * 100.0  # Convert to percentage
+                    
+                    # Secondary: Use best signal strength
+                    elif best and "strength" in best and best["strength"] is not None:
                         base_strength = best["strength"]
+                    
+                    # Tertiary: Calculate from available strategy data
                     elif best:
-                        # Fallback: calculate from available strategy data
                         base_strength = 0.0
                         for strategy_name, strategy_data in best.get("components", {}).items():
-                            if isinstance(strategy_data, dict) and "strength" in strategy_data:
+                            if isinstance(strategy_data, dict) and "strength" in strategy_data and strategy_data["strength"] is not None:
                                 base_strength = max(base_strength, strategy_data["strength"])
-                    else:
-                        # Ultimate fallback: return neutral strength instead of None
+                    
+                    # Ultimate fallback: return neutral strength instead of None
+                    if base_strength is None:
                         base_strength = 0.0
                     print(
                         f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {base_strength} | "

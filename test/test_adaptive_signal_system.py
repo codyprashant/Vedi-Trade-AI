@@ -27,7 +27,7 @@ from app.signal_engine import SignalEngine
 class TestAdaptiveSignalSystem:
     """Test suite for adaptive signal generation system."""
     
-    def __init__(self):
+    def setUp(self):
         # Create test components
         self.threshold_manager = ThresholdManagerFactory.create_conservative()
         self.sanity_filter = SignalSanityFilterFactory.create_strict()

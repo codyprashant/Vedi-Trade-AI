@@ -79,6 +79,11 @@ Base URL: `http://localhost:8001`
 - `GET /openapi.json` — live OpenAPI spec.
 - `GET /docs` — Swagger UI.
 
+## Additional Documentation
+
+### Signal Processing
+- **[Weighted Voting System](docs/Weighted_Voting_System.md)** — Comprehensive guide to the weighted voting decision aggregation system for technical indicators
+
 ## Export Swagger for Frontend
 Generate a static OpenAPI JSON file to `docs/openapi.json`:
 

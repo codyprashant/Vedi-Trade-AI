@@ -28,6 +28,10 @@ class IndicatorResult:
     direction: Direction
     value: Dict[str, float]
     contribution: float  # weight if aligned, else 0
+    # New weighted vote system fields
+    vote: int  # -1 (sell), 0 (neutral), +1 (buy)
+    strength: float  # 0.0 to 1.0
+    label: str  # 'weak' or 'strong'
 
 
 def compute_indicators(df: pd.DataFrame, params: Dict[str, Dict] | None = None) -> Dict[str, pd.Series]:
@@ -161,6 +165,28 @@ def _cross_under(prev_a: float, prev_b: float, a: float, b: float) -> bool:
     return prev_a >= prev_b and a < b
 
 
+def _direction_to_vote_system(direction: Direction) -> tuple[int, float, str]:
+    """
+    Convert old direction system to new vote/strength/label system.
+    
+    Returns:
+        tuple: (vote, strength, label)
+            vote: -1 (sell), 0 (neutral), +1 (buy)
+            strength: 0.0 to 1.0
+            label: 'weak' or 'strong'
+    """
+    if direction == "buy":
+        return (1, 1.0, "strong")
+    elif direction == "sell":
+        return (-1, 1.0, "strong")
+    elif direction == "weak_buy":
+        return (1, 0.5, "weak")
+    elif direction == "weak_sell":
+        return (-1, 0.5, "weak")
+    else:  # neutral
+        return (0, 0.0, "weak")
+
+
 def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[str, Dict] | None = None) -> Dict[str, IndicatorResult]:
     params = params or INDICATOR_PARAMS
 
@@ -198,7 +224,9 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     else:
         rsi_dir = "neutral"
         rsi_val = np.nan
-    results["RSI"] = IndicatorResult(rsi_dir, {"rsi": rsi_val}, 0)
+    # Convert direction to vote system
+    rsi_vote, rsi_strength, rsi_label = _direction_to_vote_system(rsi_dir)
+    results["RSI"] = IndicatorResult(rsi_dir, {"rsi": rsi_val}, 0, rsi_vote, rsi_strength, rsi_label)
 
     # Enhanced MACD with histogram magnitude and soft signals
     macd_val = safe_float(ind["macd"].iloc[-1])
@@ -230,7 +258,9 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     # Use original values for output (including NaN if present)
     macd_val_out = float(ind["macd"].iloc[-1]) if macd_val is not None else np.nan
     macd_sig_out = float(ind["macd_signal"].iloc[-1]) if macd_sig is not None else np.nan
-    results["MACD"] = IndicatorResult(macd_dir, {"macd": macd_val_out, "signal": macd_sig_out}, 0)
+    # Convert direction to vote system
+    macd_vote, macd_strength, macd_label = _direction_to_vote_system(macd_dir)
+    results["MACD"] = IndicatorResult(macd_dir, {"macd": macd_val_out, "signal": macd_sig_out}, 0, macd_vote, macd_strength, macd_label)
 
     # Enhanced SMA cross with trend strength
     sma_s = safe_float(ind["sma_short"].iloc[-1])
@@ -256,7 +286,9 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     # Use original values for output (including NaN if present)
     sma_s_out = float(ind["sma_short"].iloc[-1]) if sma_s is not None else np.nan
     sma_l_out = float(ind["sma_long"].iloc[-1]) if sma_l is not None else np.nan
-    results["SMA"] = IndicatorResult(sma_dir, {"sma50": sma_s_out, "sma200": sma_l_out}, 0)
+    # Convert direction to vote system
+    sma_vote, sma_strength, sma_label = _direction_to_vote_system(sma_dir)
+    results["SMA"] = IndicatorResult(sma_dir, {"sma50": sma_s_out, "sma200": sma_l_out}, 0, sma_vote, sma_strength, sma_label)
 
     # Enhanced EMA cross with trend strength
     ema_s = safe_float(ind["ema_short"].iloc[-1])
@@ -282,7 +314,9 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     # Use original values for output (including NaN if present)
     ema_s_out = float(ind["ema_short"].iloc[-1]) if ema_s is not None else np.nan
     ema_l_out = float(ind["ema_long"].iloc[-1]) if ema_l is not None else np.nan
-    results["EMA"] = IndicatorResult(ema_dir, {"ema20": ema_s_out, "ema50": ema_l_out}, 0)
+    # Convert direction to vote system
+    ema_vote, ema_strength, ema_label = _direction_to_vote_system(ema_dir)
+    results["EMA"] = IndicatorResult(ema_dir, {"ema20": ema_s_out, "ema50": ema_l_out}, 0, ema_vote, ema_strength, ema_label)
 
     # Enhanced Bollinger + RSI condition with soft signals
     bb_low = safe_float(ind["bb_low"].iloc[-1])
@@ -316,7 +350,9 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     bb_low_out = float(ind["bb_low"].iloc[-1]) if bb_low is not None else np.nan
     bb_high_out = float(ind["bb_high"].iloc[-1]) if bb_high is not None else np.nan
     close_out = float(last["close"]) if close is not None else np.nan
-    results["BBANDS"] = IndicatorResult(bb_dir, {"bb_low": bb_low_out, "bb_high": bb_high_out, "close": close_out}, 0)
+    # Convert direction to vote system
+    bb_vote, bb_strength, bb_label = _direction_to_vote_system(bb_dir)
+    results["BBANDS"] = IndicatorResult(bb_dir, {"bb_low": bb_low_out, "bb_high": bb_high_out, "close": close_out}, 0, bb_vote, bb_strength, bb_label)
 
     # Enhanced Stochastic cross with zone-based signals
     k = safe_float(ind["stoch_k"].iloc[-1])
@@ -349,7 +385,9 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     # Use original values for output (including NaN if present)
     k_out = float(ind["stoch_k"].iloc[-1]) if k is not None else np.nan
     d_out = float(ind["stoch_d"].iloc[-1]) if d is not None else np.nan
-    results["STOCH"] = IndicatorResult(st_dir, {"k": k_out, "d": d_out}, 0)
+    # Convert direction to vote system
+    st_vote, st_strength, st_label = _direction_to_vote_system(st_dir)
+    results["STOCH"] = IndicatorResult(st_dir, {"k": k_out, "d": d_out}, 0, st_vote, st_strength, st_label)
 
     # ATR filter (unchanged)
     atr = safe_float(ind["atr"].iloc[-1])
@@ -363,7 +401,9 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     
     # Use original values for output (including NaN if present)
     atr_out = float(ind["atr"].iloc[-1]) if atr is not None else np.nan
-    results["ATR"] = IndicatorResult(atr_dir, {"atr": atr_out, "atr_ratio": atr_ratio}, 0)
+    # Convert direction to vote system
+    atr_vote, atr_strength, atr_label = _direction_to_vote_system(atr_dir)
+    results["ATR"] = IndicatorResult(atr_dir, {"atr": atr_out, "atr_ratio": atr_ratio}, 0, atr_vote, atr_strength, atr_label)
 
     return results
 
@@ -501,6 +541,114 @@ def get_signal_confidence_zone(strength: float) -> str:
         if strength >= zone_config["min"]:
             return zone_name
     return "neutral"
+
+
+def compute_weighted_vote_aggregation(results: Dict[str, IndicatorResult], weights: Dict[str, float] | None = None) -> Dict[str, any]:
+    """
+    Aggregate indicator votes using a weighted voting system.
+    
+    Args:
+        results: Dictionary of indicator results with vote/strength/label fields
+        weights: Optional weights for each indicator (defaults to equal weights)
+    
+    Returns:
+        Dictionary containing aggregated vote results with detailed breakdown
+    """
+    if not results:
+        return {
+            "total_vote_score": 0.0,
+            "final_direction": "neutral",
+            "confidence": 0.0,
+            "vote_breakdown": {},
+            "indicator_count": 0,
+            "strong_signals": 0,
+            "weak_signals": 0
+        }
+    
+    # Default equal weights if not provided
+    if weights is None:
+        weights = {name: 1.0 for name in results.keys()}
+    
+    total_weighted_vote = 0.0
+    total_weight = 0.0
+    vote_breakdown = {}
+    strong_signals = 0
+    weak_signals = 0
+    
+    for indicator_name, result in results.items():
+        # Handle None values gracefully
+        if result is None or not hasattr(result, 'vote'):
+            continue
+            
+        vote = getattr(result, 'vote', 0)
+        strength = getattr(result, 'strength', 0.0)
+        label = getattr(result, 'label', 'neutral')
+        
+        # Skip if vote is None
+        if vote is None:
+            continue
+            
+        # Get weight for this indicator
+        indicator_weight = weights.get(indicator_name, 1.0)
+        
+        # Calculate weighted contribution
+        # Strong signals get full weight, weak signals get reduced weight
+        strength_multiplier = 1.0 if label == 'strong' else 0.6
+        weighted_contribution = vote * strength * indicator_weight * strength_multiplier
+        
+        total_weighted_vote += weighted_contribution
+        total_weight += indicator_weight
+        
+        # Track signal types
+        if label == 'strong':
+            strong_signals += 1
+        elif label == 'weak':
+            weak_signals += 1
+            
+        # Store breakdown for debugging
+        vote_breakdown[indicator_name] = {
+            "vote": vote,
+            "strength": strength,
+            "label": label,
+            "weight": indicator_weight,
+            "contribution": weighted_contribution
+        }
+    
+    # Calculate final metrics
+    if total_weight > 0:
+        normalized_vote_score = total_weighted_vote / total_weight
+    else:
+        normalized_vote_score = 0.0
+    
+    # Determine final direction based on vote score
+    if normalized_vote_score > 0.1:
+        final_direction = "buy"
+    elif normalized_vote_score < -0.1:
+        final_direction = "sell"
+    else:
+        final_direction = "neutral"
+    
+    # Calculate confidence based on absolute vote score and signal consensus
+    confidence = min(abs(normalized_vote_score), 1.0)
+    
+    # Boost confidence if we have strong signal consensus
+    if strong_signals >= 2:
+        confidence *= 1.2
+    elif strong_signals == 1 and weak_signals >= 2:
+        confidence *= 1.1
+    
+    # Cap confidence at 1.0
+    confidence = min(confidence, 1.0)
+    
+    return {
+        "total_vote_score": normalized_vote_score,
+        "final_direction": final_direction,
+        "confidence": confidence,
+        "vote_breakdown": vote_breakdown,
+        "indicator_count": len([r for r in results.values() if r is not None and hasattr(r, 'vote') and getattr(r, 'vote', None) is not None]),
+        "strong_signals": strong_signals,
+        "weak_signals": weak_signals
+    }
 
 
 def best_signal(strategies: Dict[str, Dict]) -> Optional[Dict]:

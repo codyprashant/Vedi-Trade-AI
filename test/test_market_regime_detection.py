@@ -30,7 +30,7 @@ from mtf_confirmation import MultiTimeframeConfirmation
 class TestMarketRegimeDetection:
     """Test suite for market regime detection and adaptive responses"""
     
-    def __init__(self):
+    def setUp(self):
         """Initialize test components"""
         self.threshold_manager = ThresholdManagerFactory.create_conservative()
         self.sanity_filter = SignalSanityFilterFactory.create_strict()

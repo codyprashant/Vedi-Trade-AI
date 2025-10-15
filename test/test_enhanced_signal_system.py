@@ -36,7 +36,7 @@ from app.signal_engine import SignalEngine
 class TestEnhancedSignalSystem:
     """Test suite for enhanced signal generation system."""
     
-    def __init__(self):
+    def setUp(self):
         # Create a mock fetch function for testing
         async def mock_fetch_history(symbol, timeframe, count):
             return self.create_test_data(length=count)

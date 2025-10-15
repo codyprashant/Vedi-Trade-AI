@@ -32,7 +32,7 @@ from mtf_confirmation import MultiTimeframeConfirmation
 class TestEdgeCases:
     """Test suite for edge cases and error handling"""
     
-    def __init__(self):
+    def setUp(self):
         """Initialize test components"""
         self.threshold_manager = ThresholdManagerFactory.create_conservative()
         self.sanity_filter = SignalSanityFilterFactory.create_strict()

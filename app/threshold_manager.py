@@ -187,6 +187,147 @@ class ThresholdManager:
         
         return adjustment
     
+    def compute_dynamic_threshold_with_votes(self,
+                                           vote_result: Dict[str, Any],
+                                           market_conditions: Dict[str, Any],
+                                           symbol: str = "UNKNOWN",
+                                           timeframe: str = "M15") -> Tuple[float, Dict[str, Any]]:
+        """
+        Compute dynamic threshold based on weighted vote results and market conditions.
+        
+        This method integrates the weighted voting system with adaptive thresholds
+        to provide more responsive signal filtering.
+        
+        Args:
+            vote_result: Results from compute_weighted_vote_aggregation
+            market_conditions: Dict containing market data (ATR, RSI, MACD, etc.)
+            symbol: Trading symbol for logging
+            timeframe: Timeframe for context
+            
+        Returns:
+            Tuple of (dynamic_threshold, metadata_dict)
+        """
+        try:
+            # Extract market conditions
+            atr_ratio = market_conditions.get('atr_ratio', 0.002)
+            rsi_deviation = market_conditions.get('rsi_deviation', 0.0)
+            macd_histogram = market_conditions.get('macd_histogram', 0.0)
+            price_ma_deviation = market_conditions.get('price_ma_deviation', 0.0)
+            
+            # Get base adaptive threshold
+            base_threshold, base_metadata = self.compute_adaptive_threshold(
+                atr_ratio, rsi_deviation, macd_histogram, price_ma_deviation, symbol, timeframe
+            )
+            
+            # Extract vote metrics
+            vote_confidence = vote_result.get('confidence', 0.0)
+            strong_signals = vote_result.get('strong_signals', 0)
+            weak_signals = vote_result.get('weak_signals', 0)
+            total_vote_score = abs(vote_result.get('total_vote_score', 0.0))
+            indicator_count = vote_result.get('indicator_count', 0)
+            
+            # Calculate vote-based adjustments
+            vote_adjustments = self._calculate_vote_based_adjustments(
+                vote_confidence, strong_signals, weak_signals, total_vote_score, indicator_count
+            )
+            
+            # Apply vote adjustments to base threshold
+            dynamic_threshold = base_threshold + vote_adjustments['total_adjustment']
+            
+            # Ensure threshold stays within expanded dynamic range [45, 75]
+            dynamic_min = 45.0
+            dynamic_max = 75.0
+            clamped_threshold = max(dynamic_min, min(dynamic_max, dynamic_threshold))
+            
+            # Create comprehensive metadata
+            metadata = {
+                **base_metadata,
+                "vote_confidence": vote_confidence,
+                "strong_signals": strong_signals,
+                "weak_signals": weak_signals,
+                "total_vote_score": total_vote_score,
+                "indicator_count": indicator_count,
+                "vote_adjustments": vote_adjustments,
+                "dynamic_threshold": dynamic_threshold,
+                "final_threshold": clamped_threshold,
+                "dynamic_range": [dynamic_min, dynamic_max],
+                "was_vote_clamped": clamped_threshold != dynamic_threshold
+            }
+            
+            logger.debug(f"Dynamic threshold for {symbol} {timeframe}: "
+                        f"{clamped_threshold:.1f}% (base: {base_threshold:.1f}%, "
+                        f"vote_adj: {vote_adjustments['total_adjustment']:+.1f}%)")
+            
+            return clamped_threshold, metadata
+            
+        except Exception as e:
+            logger.error(f"Error computing dynamic threshold with votes: {e}")
+            # Fallback to base adaptive threshold
+            return self.compute_adaptive_threshold(
+                market_conditions.get('atr_ratio', 0.002),
+                market_conditions.get('rsi_deviation', 0.0),
+                market_conditions.get('macd_histogram', 0.0),
+                market_conditions.get('price_ma_deviation', 0.0),
+                symbol, timeframe
+            )
+    
+    def _calculate_vote_based_adjustments(self,
+                                        confidence: float,
+                                        strong_signals: int,
+                                        weak_signals: int,
+                                        vote_score: float,
+                                        indicator_count: int) -> Dict[str, float]:
+        """
+        Calculate threshold adjustments based on weighted vote results.
+        
+        Args:
+            confidence: Vote confidence (0.0 to 1.0)
+            strong_signals: Number of strong signals
+            weak_signals: Number of weak signals
+            vote_score: Absolute total vote score
+            indicator_count: Total number of valid indicators
+            
+        Returns:
+            Dict containing individual and total adjustments
+        """
+        # Confidence adjustment: High confidence → loosen threshold (negative)
+        confidence_adj = -(confidence * 8.0)  # Up to -8% for max confidence
+        
+        # Signal strength adjustment: More strong signals → loosen threshold
+        if strong_signals >= 3:
+            strength_adj = -5.0  # Strong consensus
+        elif strong_signals >= 2:
+            strength_adj = -3.0  # Moderate consensus
+        elif strong_signals == 1 and weak_signals >= 2:
+            strength_adj = -1.0  # Mixed but leaning strong
+        else:
+            strength_adj = 0.0   # No strong signals
+        
+        # Vote score adjustment: Higher absolute score → loosen threshold
+        score_adj = -(min(vote_score, 1.0) * 3.0)  # Up to -3%
+        
+        # Indicator coverage adjustment: More indicators → slight loosening
+        if indicator_count >= 5:
+            coverage_adj = -1.0  # Good coverage
+        elif indicator_count >= 3:
+            coverage_adj = -0.5  # Moderate coverage
+        else:
+            coverage_adj = 1.0   # Poor coverage, tighten
+        
+        # Combine adjustments
+        total_adjustment = confidence_adj + strength_adj + score_adj + coverage_adj
+        
+        # Cap total adjustment at ±10%
+        total_adjustment = max(-10.0, min(10.0, total_adjustment))
+        
+        return {
+            "confidence_adjustment": confidence_adj,
+            "strength_adjustment": strength_adj,
+            "score_adjustment": score_adj,
+            "coverage_adjustment": coverage_adj,
+            "total_adjustment": total_adjustment
+        }
+
     def get_threshold_for_conditions(self, market_conditions: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
         """
         Convenience method to compute threshold from market conditions dict.
