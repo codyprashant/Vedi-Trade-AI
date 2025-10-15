@@ -7,10 +7,20 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
-from .config import INDICATOR_PARAMS, WEIGHTS
+from .config import (
+    INDICATOR_PARAMS,
+    WEIGHTS,
+    MACD_HIST_MIN,
+    NEUTRAL_WEIGHT_FACTOR,
+    TREND_WEIGHT_RATIO,
+    MOMENTUM_WEIGHT_RATIO,
+    CONFIDENCE_ZONES,
+    ATR_STABILITY_BONUS,
+    PRICE_ACTION_BONUS,
+)
 
 
-Direction = Literal["buy", "sell", "none"]
+Direction = Literal["buy", "sell", "neutral"]
 
 
 @dataclass
@@ -167,25 +177,33 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     rsi_val = safe_float(ind["rsi"].iloc[-1])
     if rsi_val is not None:
         rsi_dir: Direction = "buy" if rsi_val < params["RSI"]["oversold"] else (
-            "sell" if rsi_val > params["RSI"]["overbought"] else "none"
+            "sell" if rsi_val > params["RSI"]["overbought"] else "neutral"
         )
     else:
-        rsi_dir = "none"
+        rsi_dir = "neutral"
         rsi_val = np.nan
     results["RSI"] = IndicatorResult(rsi_dir, {"rsi": rsi_val}, 0)
 
-    # MACD cross
+    # MACD cross and histogram
     macd_val = safe_float(ind["macd"].iloc[-1])
     macd_sig = safe_float(ind["macd_signal"].iloc[-1])
     macd_prev = safe_float(ind["macd"].iloc[-2])
     macd_sig_prev = safe_float(ind["macd_signal"].iloc[-2])
-    macd_dir: Direction = "none"
+    macd_hist = safe_float(ind["macd_histogram"].iloc[-1]) if "macd_histogram" in ind else None
+    macd_dir: Direction = "neutral"
     
     if all(v is not None for v in [macd_val, macd_sig, macd_prev, macd_sig_prev]):
+        # Traditional crossover signals
         if _cross_over(macd_prev, macd_sig_prev, macd_val, macd_sig):
             macd_dir = "buy"
         elif _cross_under(macd_prev, macd_sig_prev, macd_val, macd_sig):
             macd_dir = "sell"
+        # Enhanced: histogram magnitude check
+        elif macd_hist is not None and abs(macd_hist) >= params.get("MACD_HIST_MIN", MACD_HIST_MIN):
+            if macd_hist > 0:
+                macd_dir = "buy"
+            else:
+                macd_dir = "sell"
     
     # Use original values for output (including NaN if present)
     macd_val_out = float(ind["macd"].iloc[-1]) if macd_val is not None else np.nan
@@ -197,7 +215,7 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     sma_l = safe_float(ind["sma_long"].iloc[-1])
     sma_s_prev = safe_float(ind["sma_short"].iloc[-2])
     sma_l_prev = safe_float(ind["sma_long"].iloc[-2])
-    sma_dir: Direction = "none"
+    sma_dir: Direction = "neutral"
     
     if all(v is not None for v in [sma_s, sma_l, sma_s_prev, sma_l_prev]):
         if _cross_over(sma_s_prev, sma_l_prev, sma_s, sma_l):
@@ -215,7 +233,7 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     ema_l = safe_float(ind["ema_long"].iloc[-1])
     ema_s_prev = safe_float(ind["ema_short"].iloc[-2])
     ema_l_prev = safe_float(ind["ema_long"].iloc[-2])
-    ema_dir: Direction = "none"
+    ema_dir: Direction = "neutral"
     
     if all(v is not None for v in [ema_s, ema_l, ema_s_prev, ema_l_prev]):
         if _cross_over(ema_s_prev, ema_l_prev, ema_s, ema_l):
@@ -232,7 +250,7 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     bb_low = safe_float(ind["bb_low"].iloc[-1])
     bb_high = safe_float(ind["bb_high"].iloc[-1])
     close = safe_float(last["close"])
-    bb_dir: Direction = "none"
+    bb_dir: Direction = "neutral"
     
     if all(v is not None for v in [bb_low, bb_high, close, rsi_val]):
         if close <= bb_low and rsi_val < params["RSI"]["oversold"]:
@@ -251,7 +269,7 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     d = safe_float(ind["stoch_d"].iloc[-1])
     k_prev = safe_float(ind["stoch_k"].iloc[-2])
     d_prev = safe_float(ind["stoch_d"].iloc[-2])
-    st_dir: Direction = "none"
+    st_dir: Direction = "neutral"
     
     if all(v is not None for v in [k, d, k_prev, d_prev]):
         if _cross_over(k_prev, d_prev, k, d) and k < params["STOCH"]["oversold"]:
@@ -266,19 +284,29 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
 
     # ATR filter
     atr = safe_float(ind["atr"].iloc[-1])
-    atr_dir: Direction = "none"
+    atr_dir: Direction = "neutral"
     atr_ratio = 0.0
     
     if atr is not None and close is not None and close > 0:
         atr_ratio = atr / close
         atr_ok = atr_ratio >= params["ATR"]["min_ratio"]
-        atr_dir = "buy" if atr_ok else "none"
+        atr_dir = "buy" if atr_ok else "neutral"
     
     # Use original values for output (including NaN if present)
     atr_out = float(ind["atr"].iloc[-1]) if atr is not None else np.nan
     results["ATR"] = IndicatorResult(atr_dir, {"atr": atr_out, "atr_ratio": atr_ratio}, 0)
 
     return results
+
+
+def _get_indicator_contribution(weight: float, is_aligned: bool, is_neutral: bool) -> float:
+    """Calculate indicator contribution with partial credit for neutral indicators."""
+    if is_aligned:
+        return weight
+    elif is_neutral:
+        return weight * NEUTRAL_WEIGHT_FACTOR
+    else:
+        return 0.0
 
 
 def _strength(direction: Direction, contributions: Dict[str, float]) -> float:
@@ -290,7 +318,7 @@ def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict
 
     # Build contributions for each strategy
     # Trend: SMA/EMA cross + MACD + ATR
-    trend_dir: Direction = "none"
+    trend_dir: Direction = "neutral"
     # Decide direction via majority among SMA, EMA, MACD (ignore ATR for direction)
     dirs = [results["SMA"].direction, results["EMA"].direction, results["MACD"].direction]
     buys = dirs.count("buy")
@@ -301,14 +329,22 @@ def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict
         trend_dir = "sell"
 
     trend_contrib = {
-        "SMA_EMA": (weights["SMA_EMA"] if results["SMA"].direction == trend_dir and results["EMA"].direction == trend_dir else 0),
-        "MACD": (weights["MACD"] if results["MACD"].direction == trend_dir else 0),
-        "ATR": (weights.get("ATR", 0) if results["ATR"].direction == "buy" else 0),  # ATR acts as filter; contributes when OK
+        "SMA_EMA": _get_indicator_contribution(
+            weights["SMA_EMA"], 
+            results["SMA"].direction == trend_dir and results["EMA"].direction == trend_dir,
+            results["SMA"].direction == "neutral" or results["EMA"].direction == "neutral"
+        ),
+        "MACD": _get_indicator_contribution(
+            weights["MACD"], 
+            results["MACD"].direction == trend_dir,
+            results["MACD"].direction == "neutral"
+        ),
+        "ATR_STABILITY": (weights.get("ATR_STABILITY", weights.get("ATR", 0)) if results["ATR"].direction == "buy" else 0),  # ATR acts as filter; contributes when OK
     }
     trend_strength = _strength(trend_dir, trend_contrib)
 
     # Momentum: RSI + Stochastic + Bollinger
-    momentum_dir: Direction = "none"
+    momentum_dir: Direction = "neutral"
     dirs_m = [results["RSI"].direction, results["STOCH"].direction, results["BBANDS"].direction]
     buys_m = dirs_m.count("buy")
     sells_m = dirs_m.count("sell")
@@ -318,9 +354,21 @@ def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict
         momentum_dir = "sell"
 
     momentum_contrib = {
-        "RSI": (weights["RSI"] if results["RSI"].direction == momentum_dir else 0),
-        "STOCH": (weights["STOCH"] if results["STOCH"].direction == momentum_dir else 0),
-        "BBANDS": (weights["BBANDS"] if results["BBANDS"].direction == momentum_dir else 0),
+        "RSI": _get_indicator_contribution(
+            weights["RSI"], 
+            results["RSI"].direction == momentum_dir,
+            results["RSI"].direction == "neutral"
+        ),
+        "STOCH": _get_indicator_contribution(
+            weights["STOCH"], 
+            results["STOCH"].direction == momentum_dir,
+            results["STOCH"].direction == "neutral"
+        ),
+        "BBANDS": _get_indicator_contribution(
+            weights["BBANDS"], 
+            results["BBANDS"].direction == momentum_dir,
+            results["BBANDS"].direction == "neutral"
+        ),
     }
     momentum_strength = _strength(momentum_dir, momentum_contrib)
 
@@ -336,21 +384,39 @@ def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict
     ]
     buys_c = all_dirs.count("buy")
     sells_c = all_dirs.count("sell")
-    combined_dir: Direction = "none"
+    combined_dir: Direction = "neutral"
     if buys_c > sells_c and buys_c > 0:
         combined_dir = "buy"
     elif sells_c > buys_c and sells_c > 0:
         combined_dir = "sell"
 
     combined_contrib = {
-        "RSI": (WEIGHTS["RSI"] if results["RSI"].direction == combined_dir else 0),
-        "MACD": (WEIGHTS["MACD"] if results["MACD"].direction == combined_dir else 0),
-        "SMA_EMA": (
-            WEIGHTS["SMA_EMA"] if (results["SMA"].direction == combined_dir and results["EMA"].direction == combined_dir) else 0
+        "RSI": _get_indicator_contribution(
+            weights["RSI"], 
+            results["RSI"].direction == combined_dir,
+            results["RSI"].direction == "neutral"
         ),
-        "BBANDS": (WEIGHTS["BBANDS"] if results["BBANDS"].direction == combined_dir else 0),
-        "STOCH": (WEIGHTS["STOCH"] if results["STOCH"].direction == combined_dir else 0),
-        "ATR": (WEIGHTS.get("ATR", 0) if results["ATR"].direction == "buy" else 0),
+        "MACD": _get_indicator_contribution(
+            weights["MACD"], 
+            results["MACD"].direction == combined_dir,
+            results["MACD"].direction == "neutral"
+        ),
+        "SMA_EMA": _get_indicator_contribution(
+            weights["SMA_EMA"], 
+            results["SMA"].direction == combined_dir and results["EMA"].direction == combined_dir,
+            results["SMA"].direction == "neutral" or results["EMA"].direction == "neutral"
+        ),
+        "BBANDS": _get_indicator_contribution(
+            weights["BBANDS"], 
+            results["BBANDS"].direction == combined_dir,
+            results["BBANDS"].direction == "neutral"
+        ),
+        "STOCH": _get_indicator_contribution(
+            weights["STOCH"], 
+            results["STOCH"].direction == combined_dir,
+            results["STOCH"].direction == "neutral"
+        ),
+        "ATR_STABILITY": (weights.get("ATR_STABILITY", weights.get("ATR", 0)) if results["ATR"].direction == "buy" else 0),
     }
     combined_strength = _strength(combined_dir, combined_contrib)
 
@@ -361,12 +427,61 @@ def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict
     }
 
 
+def get_signal_confidence_zone(strength: float) -> str:
+    """Determine signal confidence zone based on strength."""
+    # Sort zones by minimum threshold in descending order
+    sorted_zones = sorted(CONFIDENCE_ZONES.items(), key=lambda x: x[1]["min"], reverse=True)
+    
+    for zone_name, zone_config in sorted_zones:
+        if strength >= zone_config["min"]:
+            return zone_name
+    return "neutral"
+
+
 def best_signal(strategies: Dict[str, Dict]) -> Optional[Dict]:
-    best = None
+    """Calculate weighted blend of strategies instead of single best."""
+    if not strategies:
+        return None
+    
+    # Calculate weighted blend
+    trend_data = strategies.get("trend", {})
+    momentum_data = strategies.get("momentum", {})
+    combined_data = strategies.get("combined", {})
+    
+    trend_strength = trend_data.get("strength", 0.0)
+    momentum_strength = momentum_data.get("strength", 0.0)
+    combined_strength = combined_data.get("strength", 0.0)
+    
+    # Apply strategy weight ratios
+    weighted_trend = trend_strength * TREND_WEIGHT_RATIO
+    weighted_momentum = momentum_strength * MOMENTUM_WEIGHT_RATIO
+    weighted_combined = combined_strength * (1.0 - TREND_WEIGHT_RATIO - MOMENTUM_WEIGHT_RATIO)
+    
+    # Calculate final blended strength
+    final_strength = weighted_trend + weighted_momentum + weighted_combined
+    
+    # Determine direction based on strongest individual strategy
+    best_individual = None
+    max_strength = 0.0
     for name, data in strategies.items():
-        if best is None or data["strength"] > best["strength"]:
-            best = {"strategy": name, **data}
-    return best
+        if data.get("strength", 0.0) > max_strength:
+            max_strength = data.get("strength", 0.0)
+            best_individual = {"strategy": name, **data}
+    
+    if best_individual:
+        return {
+            "strategy": "weighted_blend",
+            "direction": best_individual["direction"],
+            "strength": final_strength,
+            "components": {
+                "trend": {"strength": trend_strength, "weighted": weighted_trend},
+                "momentum": {"strength": momentum_strength, "weighted": weighted_momentum},
+                "combined": {"strength": combined_strength, "weighted": weighted_combined},
+            },
+            "best_individual": best_individual["strategy"]
+        }
+    
+    return None
 
 
 # --- Multi-timeframe helpers ---
@@ -418,7 +533,7 @@ def price_action_direction(df: pd.DataFrame, lookback: int = 5, params: Dict[str
     """
     p = params or INDICATOR_PARAMS
     if len(df) < max(lookback, p["EMA"]["short"]):
-        return "none"
+        return "neutral"
 
     # Prepare last candles
     last = df.iloc[-1]
@@ -485,4 +600,4 @@ def price_action_direction(df: pd.DataFrame, lookback: int = 5, params: Dict[str
         return "buy"
     if downs >= (lookback // 2 + 1) and close_last < ema20_last:
         return "sell"
-    return "none"
+    return "neutral"

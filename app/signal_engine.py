@@ -21,12 +21,17 @@ from .config import (
     TREND_TIMEFRAME,
     ALIGNMENT_BOOST_H1,
     ALIGNMENT_BOOST_H4,
+    ATR_STABILITY_BONUS,
+    PRICE_ACTION_BONUS,
+    CONFIDENCE_ZONES,
+    DEBUG_SIGNALS,
 )
 from .indicators import (
     compute_indicators,
     evaluate_signals,
     compute_strategy_strength,
     best_signal,
+    get_signal_confidence_zone,
     ema_trend_direction,
     atr_last,
     atr_last_and_mean,
@@ -87,7 +92,7 @@ class SignalEngine:
                         if isinstance(res, Exception):
                             return {"tf": tf, "status": f"error:{res}"}
                         if res is None:
-                            return {"tf": tf, "status": "none", "len": 0}
+                            return {"tf": tf, "status": "neutral", "len": 0}
                         try:
                             last_ts = str(pd.to_datetime(res.iloc[-1]["time"]))
                         except Exception:
@@ -132,7 +137,7 @@ class SignalEngine:
                         valid_inds = 0
                         buy_cnt = 0
                         sell_cnt = 0
-                        none_cnt = 0
+                        neutral_cnt = 0
                         for name, r in res.items():
                             vals = list(r.value.values())
                             is_valid = all(
@@ -146,10 +151,10 @@ class SignalEngine:
                             elif r.direction == "sell":
                                 sell_cnt += 1
                             else:
-                                none_cnt += 1
+                                neutral_cnt += 1
                         valid_pct = round(100.0 * valid_inds / max(1, total_inds), 1)
                     except Exception:
-                        total_inds, valid_inds, buy_cnt, sell_cnt, none_cnt, valid_pct = 0, 0, 0, 0, 0, 0.0
+                        total_inds, valid_inds, buy_cnt, sell_cnt, neutral_cnt, valid_pct = 0, 0, 0, 0, 0, 0.0
 
                     # Persist indicator snapshot every 10 minutes per symbol
                     try:
@@ -176,7 +181,7 @@ class SignalEngine:
                         base_strength = (best["strength"] if best and "strength" in best else None)
                         print(
                             f"Signal logs - Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
-                            f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, none:{none_cnt}}} | base_strength {base_strength} | "
+                            f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, neutral:{neutral_cnt}}} | base_strength {base_strength} | "
                             f"signal False | insert skipped | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
                         )
                         # Consolidated flow log with reason
@@ -281,10 +286,10 @@ class SignalEngine:
                     sl_pips = sl_distance / pip_value
                     tp_pips = tp_distance / pip_value
 
-                    # Unified alignment boost: additive H1 and H4 components, no penalties on misalignment
-                    h1_boost = float(ALIGNMENT_BOOST_H1) if aligns_h1 else 0.0
-                    h4_boost = float(ALIGNMENT_BOOST_H4) if (aligns_h1 and h4_dir == h1_dir) else 0.0
-                    alignment_boost = h1_boost + h4_boost
+                    # Multiplicative alignment boost: enhances base strength proportionally
+                    h1_multiplier = 1.0 + (float(ALIGNMENT_BOOST_H1) / 100.0) if aligns_h1 else 1.0
+                    h4_multiplier = 1.0 + (float(ALIGNMENT_BOOST_H4) / 100.0) if (aligns_h1 and h4_dir == h1_dir) else 1.0
+                    alignment_multiplier = h1_multiplier * h4_multiplier
 
                     # Price action heuristic over last 5 candles
                     pa_dir = price_action_direction(m15_df, lookback=5, params=indicator_params)
@@ -306,7 +311,31 @@ class SignalEngine:
                     }
                     base_strength = float(sum(contrib_new.values()))
 
-                    final_strength = min(100.0, base_strength + alignment_boost)
+                    # Apply bonuses for ATR stability and price action
+                    atr_bonus = ATR_STABILITY_BONUS if volatility_state == "Normal" else 0.0
+                    pa_bonus = PRICE_ACTION_BONUS if pa_dir == m15_side else 0.0
+                    
+                    # Calculate final strength with multiplicative alignment and additive bonuses
+                    strength_with_alignment = base_strength * alignment_multiplier
+                    final_strength = min(100.0, strength_with_alignment + atr_bonus + pa_bonus)
+                    alignment_boost = final_strength - base_strength  # For logging compatibility
+                    
+                    # Determine confidence zone
+                    confidence_zone = get_signal_confidence_zone(final_strength)
+                    
+                    # Debug logging
+                    if DEBUG_SIGNALS:
+                        print(f"DEBUG - Signal Processing for {sym}:")
+                        print(f"  Base Strength: {base_strength:.2f}")
+                        print(f"  Alignment Multiplier: {alignment_multiplier:.2f}")
+                        print(f"  ATR Bonus: {atr_bonus:.2f} (volatility: {volatility_state})")
+                        print(f"  Price Action Bonus: {pa_bonus:.2f} (direction: {pa_dir})")
+                        print(f"  Final Strength: {final_strength:.2f}")
+                        print(f"  Confidence Zone: {confidence_zone}")
+                        print(f"  Contributions: {contrib_new}")
+                        print(f"  Strategy: {best.get('strategy', 'N/A')}")
+                        print(f"  Direction: {m15_side}")
+                        print("---")
 
                     # Save only when final strength >= threshold (>=50%)
                     if final_strength >= signal_threshold:
@@ -362,7 +391,7 @@ class SignalEngine:
                         base_strength = (best["strength"] if best and "strength" in best else None)
                         print(
                             f"Signal logs - Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
-                            f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, none:{none_cnt}}} | base_strength {base_strength} | "
+                            f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, neutral:{neutral_cnt}}} | base_strength {base_strength} | "
                             f"signal True | insert {insert_status} | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
                         )
                         # Consolidated flow log when signal generated
@@ -421,7 +450,7 @@ class SignalEngine:
                     if isinstance(res, Exception):
                         return {"tf": tf, "status": f"error:{res}"}
                     if res is None:
-                        return {"tf": tf, "status": "none", "len": 0}
+                        return {"tf": tf, "status": "neutral", "len": 0}
                     try:
                         last_ts = str(pd.to_datetime(res.iloc[-1]["time"]))
                     except Exception:
@@ -464,7 +493,7 @@ class SignalEngine:
                     valid_inds = 0
                     buy_cnt = 0
                     sell_cnt = 0
-                    none_cnt = 0
+                    neutral_cnt = 0
                     for name, r in res.items():
                         vals = list(r.value.values())
                         is_valid = all(
@@ -478,10 +507,10 @@ class SignalEngine:
                         elif r.direction == "sell":
                             sell_cnt += 1
                         else:
-                            none_cnt += 1
+                            neutral_cnt += 1
                     valid_pct = round(100.0 * valid_inds / max(1, total_inds), 1)
                 except Exception:
-                    total_inds, valid_inds, buy_cnt, sell_cnt, none_cnt, valid_pct = 0, 0, 0, 0, 0, 0.0
+                    total_inds, valid_inds, buy_cnt, sell_cnt, neutral_cnt, valid_pct = 0, 0, 0, 0, 0, 0.0
 
                 # Persist indicator snapshot opportunistically (do not enforce 10-minute spacing here)
                 try:
@@ -513,7 +542,7 @@ class SignalEngine:
                         "timeframe": primary_tf,
                         "indicator_valid": f"{valid_inds}/{total_inds}",
                         "indicator_valid_pct": valid_pct,
-                        "dirs": {"buy": buy_cnt, "sell": sell_cnt, "none": none_cnt},
+                        "dirs": {"buy": buy_cnt, "sell": sell_cnt, "neutral": neutral_cnt},
                         "base_strength": base_strength,
                         "had_signal": False,
                         "insert_status": "skipped",
@@ -560,10 +589,10 @@ class SignalEngine:
                 m15_side = best["direction"]
                 h1_is_bull = h1_dir == "Bullish"
                 aligns_h1 = (m15_side == "buy" and h1_is_bull) or (m15_side == "sell" and not h1_is_bull)
-                # Unified alignment boost: additive H1 and H4 components, no penalties on misalignment
-                h1_boost = float(ALIGNMENT_BOOST_H1) if aligns_h1 else 0.0
-                h4_boost = float(ALIGNMENT_BOOST_H4) if (aligns_h1 and h4_dir == h1_dir) else 0.0
-                alignment_boost = h1_boost + h4_boost
+                # Multiplicative alignment boost: enhances base strength proportionally
+                h1_multiplier = 1.0 + (float(ALIGNMENT_BOOST_H1) / 100.0) if aligns_h1 else 1.0
+                h4_multiplier = 1.0 + (float(ALIGNMENT_BOOST_H4) / 100.0) if (aligns_h1 and h4_dir == h1_dir) else 1.0
+                alignment_multiplier = h1_multiplier * h4_multiplier
                 volatility_state = "Normal"  # Simplified for manual compute summary
                 entry_price = float(m15_df.iloc[-1]["close"]) if not math.isnan(float(m15_df.iloc[-1]["close"])) else None
                 stop_loss_price = None
@@ -572,7 +601,8 @@ class SignalEngine:
 
                 # Save only when final strength >= threshold (>=50%)
                 base_strength_val = best["strength"]
-                final_strength = min(100.0, base_strength_val + alignment_boost)
+                final_strength = min(100.0, base_strength_val * alignment_multiplier)
+                alignment_boost = final_strength - base_strength_val  # For logging compatibility
                 had_signal = False
                 insert_status = "skipped"
                 if final_strength >= signal_threshold:
@@ -630,7 +660,7 @@ class SignalEngine:
                     "timeframe": primary_tf,
                     "indicator_valid": f"{valid_inds}/{total_inds}",
                     "indicator_valid_pct": valid_pct,
-                    "dirs": {"buy": buy_cnt, "sell": sell_cnt, "none": none_cnt},
+                    "dirs": {"buy": buy_cnt, "sell": sell_cnt, "neutral": neutral_cnt},
                     "base_strength": base_strength_val,
                     "final_strength": final_strength,
                     "had_signal": had_signal,

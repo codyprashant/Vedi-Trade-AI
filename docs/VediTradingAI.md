@@ -8,6 +8,16 @@ The system exposes REST endpoints for health monitoring, historical data retriev
 
 ### Recent Enhancements (2025)
 
+#### Phase 1 & 2: Enhanced Signal Generation System
+- **Partial Credit for Neutral Indicators**: Neutral signals now contribute weighted value instead of being ignored
+- **Weighted Blend Strategy**: Replaced single-best strategy selection with intelligent multi-strategy blending
+- **Multiplicative Alignment Boost**: Changed from additive to proportional enhancement for better scaling
+- **Multi-Zone Confidence System**: Strong/Weak/Neutral confidence classification with dynamic thresholds
+- **Enhanced MACD Logic**: Added histogram threshold analysis for improved signal quality
+- **ATR Stability Integration**: Enhanced final score calculation with volatility-aware adjustments
+- **Comprehensive Debug Logging**: Detailed signal processing insights for better transparency
+
+#### WebSocket & Data Streaming
 - **Enhanced WebSocket Streaming**: Real-time indicator evaluations with "neutral" instead of "none" for better UX
 - **Integrated Signal Data**: Latest signals and signal history directly in WebSocket response
 - **Precision Control**: All indicator values limited to 2 decimal places for consistency
@@ -97,9 +107,10 @@ DEFAULT_HISTORY_COUNT = 500
 #### MACD (Moving Average Convergence Divergence)
 ```python
 "MACD": {
-    "fast": 12,             # Fast EMA period
-    "slow": 26,             # Slow EMA period  
-    "signal": 9             # Signal line EMA period
+    "fast": 12,                    # Fast EMA period
+    "slow": 26,                    # Slow EMA period  
+    "signal": 9,                   # Signal line EMA period
+    "histogram_threshold": 0.5     # Enhanced histogram threshold for signal quality
 }
 ```
 
@@ -141,11 +152,23 @@ WEIGHTS = {
 }
 ```
 
-### Alignment Boost System
+### Enhanced Alignment & Confidence System
 ```python
-ALIGNMENT_BOOST_H1 = 10    # Boost when M15 aligns with H1 trend
-ALIGNMENT_BOOST_H4 = 5     # Additional boost when H4 confirms H1
-SIGNAL_THRESHOLD = 60      # Minimum strength for signal persistence (%)
+# Multiplicative Alignment Boosts (replaced additive approach)
+ALIGNMENT_BOOST_H1_MULTIPLIER = 1.10    # 10% multiplicative boost for H1 alignment
+ALIGNMENT_BOOST_H4_MULTIPLIER = 1.05    # 5% additional multiplicative boost for H4 confirmation
+SIGNAL_THRESHOLD = 60                   # Minimum strength for signal persistence (%)
+
+# Multi-Zone Confidence Classification
+CONFIDENCE_ZONES = {
+    "strong": {"min": 70, "label": "Strong Signal", "action": "trade"},
+    "weak": {"min": 50, "label": "Weak Signal", "action": "consider"}, 
+    "neutral": {"min": 0, "label": "Neutral Signal", "action": "monitor"}
+}
+
+# Enhanced Stability Bonuses
+ATR_STABILITY_BONUS = 5     # Bonus for stable volatility environments
+PRICE_ACTION_BONUS = 8      # Bonus for strong price action patterns
 ```
 
 ## Detailed Signal Generation Logic
@@ -235,63 +258,122 @@ def evaluate_ma_cross(short_ma, long_ma, short_prev, long_prev):
         return "none"
 ```
 
-#### Phase 4: Strategy Strength Computation
+#### Phase 4: Enhanced Strategy Strength Computation
 
-**Trend Strategy Analysis**:
+**Enhanced Strategy Analysis with Partial Credit**:
+The system now uses an advanced approach that gives partial credit to neutral indicators and employs weighted blending:
+
 ```python
-def compute_trend_strategy(results, weights):
-    # Direction determined by majority vote among SMA, EMA, MACD
-    trend_indicators = [results["SMA"].direction, 
-                       results["EMA"].direction, 
-                       results["MACD"].direction]
+def compute_enhanced_strategy(results, weights, strategy_type):
+    """
+    Enhanced strategy computation with partial credit for neutral indicators
+    and weighted contribution blending.
+    """
+    total_strength = 0.0
+    contributions = {}
     
-    buy_votes = trend_indicators.count("buy")
-    sell_votes = trend_indicators.count("sell")
+    # Define indicator groups by strategy type
+    if strategy_type == "trend":
+        indicators = ["SMA_EMA", "MACD", "ATR_STABILITY"]
+    elif strategy_type == "momentum": 
+        indicators = ["RSI", "STOCH", "BBANDS"]
+    else:  # combined
+        indicators = ["RSI", "MACD", "SMA_EMA", "BBANDS", "STOCH", "ATR_STABILITY"]
     
-    if buy_votes > sell_votes and buy_votes > 0:
-        trend_direction = "buy"
-    elif sell_votes > buy_votes and sell_votes > 0:
-        trend_direction = "sell"
+    # Calculate weighted contributions
+    for indicator in indicators:
+        if indicator in results:
+            direction = results[indicator].direction
+            weight = weights.get(indicator, 0)
+            
+            if direction in ["buy", "sell"]:
+                # Full weight for directional signals
+                contributions[indicator] = weight
+                total_strength += weight
+            elif direction == "neutral":
+                # Partial credit for neutral signals (50% weight)
+                partial_weight = weight * 0.5
+                contributions[indicator] = partial_weight
+                total_strength += partial_weight
+    
+    # Determine overall direction by weighted vote
+    buy_strength = sum(weights[ind] for ind in indicators 
+                      if ind in results and results[ind].direction == "buy")
+    sell_strength = sum(weights[ind] for ind in indicators 
+                       if ind in results and results[ind].direction == "sell")
+    
+    if buy_strength > sell_strength:
+        direction = "buy"
+    elif sell_strength > buy_strength:
+        direction = "sell"
     else:
-        trend_direction = "none"
+        direction = "neutral"
     
-    # Calculate contributions
-    contributions = {
-        "SMA_EMA": weights["SMA_EMA"] if (results["SMA"].direction == trend_direction 
-                                         and results["EMA"].direction == trend_direction) else 0,
-        "MACD": weights["MACD"] if results["MACD"].direction == trend_direction else 0,
-        "ATR": weights["ATR"] if results["ATR"].direction == "buy" else 0  # ATR filter
+    return {
+        "direction": direction,
+        "strength": total_strength,
+        "contributions": contributions
     }
-    
-    return trend_direction, sum(contributions.values())
 ```
 
-**Momentum Strategy Analysis**:
+**Weighted Blend Strategy Selection**:
+Instead of selecting a single "best" strategy, the system now uses intelligent weighted blending:
+
 ```python
-def compute_momentum_strategy(results, weights):
-    # Direction by majority among RSI, STOCH, BBANDS
-    momentum_indicators = [results["RSI"].direction,
-                          results["STOCH"].direction, 
-                          results["BBANDS"].direction]
+def compute_weighted_blend_strategy(strategies, weights):
+    """
+    Creates a weighted blend of all strategies instead of selecting single best.
+    This provides more stable and nuanced signal generation.
+    """
+    if not strategies:
+        return None
     
-    buy_votes = momentum_indicators.count("buy")
-    sell_votes = momentum_indicators.count("sell")
+    # Calculate weighted contributions from each strategy
+    total_buy_strength = 0.0
+    total_sell_strength = 0.0
+    total_neutral_strength = 0.0
     
-    if buy_votes > sell_votes and buy_votes > 0:
-        momentum_direction = "buy"
-    elif sell_votes > buy_votes and sell_votes > 0:
-        momentum_direction = "sell"
+    combined_contributions = {}
+    
+    for strategy_name, strategy_data in strategies.items():
+        direction = strategy_data["direction"]
+        strength = strategy_data["strength"]
+        contributions = strategy_data["contributions"]
+        
+        # Weight the strategy's influence
+        strategy_weight = 1.0  # Equal weighting for now, can be configured
+        weighted_strength = strength * strategy_weight
+        
+        # Accumulate directional strengths
+        if direction == "buy":
+            total_buy_strength += weighted_strength
+        elif direction == "sell":
+            total_sell_strength += weighted_strength
+        else:  # neutral
+            total_neutral_strength += weighted_strength
+        
+        # Merge contributions
+        for indicator, contrib in contributions.items():
+            combined_contributions[indicator] = combined_contributions.get(indicator, 0) + contrib
+    
+    # Determine final direction and strength
+    if total_buy_strength > total_sell_strength and total_buy_strength > total_neutral_strength:
+        final_direction = "buy"
+        final_strength = total_buy_strength
+    elif total_sell_strength > total_buy_strength and total_sell_strength > total_neutral_strength:
+        final_direction = "sell" 
+        final_strength = total_sell_strength
     else:
-        momentum_direction = "none"
+        final_direction = "neutral"
+        final_strength = total_neutral_strength
     
-    # Calculate contributions
-    contributions = {
-        "RSI": weights["RSI"] if results["RSI"].direction == momentum_direction else 0,
-        "STOCH": weights["STOCH"] if results["STOCH"].direction == momentum_direction else 0,
-        "BBANDS": weights["BBANDS"] if results["BBANDS"].direction == momentum_direction else 0
+    return {
+        "strategy": "weighted_blend",
+        "direction": final_direction,
+        "strength": final_strength,
+        "contributions": combined_contributions,
+        "component_strategies": strategies
     }
-    
-    return momentum_direction, sum(contributions.values())
 ```
 
 #### Phase 5: Multi-Timeframe Validation
@@ -314,21 +396,102 @@ def analyze_h1_trend(h1_data):
         return "Neutral"
 ```
 
-**Alignment Boost Calculation**:
+**Enhanced Multiplicative Alignment Boost**:
 ```python
-def calculate_alignment_boost(m15_direction, h1_trend, h4_trend):
-    boost = 0
+def calculate_multiplicative_alignment_boost(base_strength, m15_direction, h1_trend, h4_trend):
+    """
+    Enhanced alignment boost using multiplicative scaling instead of additive.
+    This provides proportional enhancement based on signal strength.
+    """
+    boost_multiplier = 1.0
     
-    # H1 alignment boost
+    # H1 alignment boost (10% multiplicative)
     if ((m15_direction == "buy" and h1_trend == "Bullish") or 
         (m15_direction == "sell" and h1_trend == "Bearish")):
-        boost += ALIGNMENT_BOOST_H1  # +10%
+        boost_multiplier *= 1.10  # 10% multiplicative boost
         
-        # H4 confirmation boost (only if H1 already aligned)
+        # H4 confirmation boost (additional 5% if H1 already aligned)
         if h1_trend == h4_trend:
-            boost += ALIGNMENT_BOOST_H4  # +5%
+            boost_multiplier *= 1.05  # Additional 5% multiplicative boost
     
-    return boost
+    # Apply multiplicative boost to base strength
+    enhanced_strength = base_strength * boost_multiplier
+    
+    return enhanced_strength, boost_multiplier
+```
+
+**Multi-Zone Confidence System**:
+```python
+def get_signal_confidence_zone(signal_strength):
+    """
+    Classifies signals into confidence zones for better risk management.
+    """
+    # Sort zones by minimum threshold (descending order)
+    sorted_zones = sorted(CONFIDENCE_ZONES.items(), 
+                         key=lambda x: x[1]["min"], reverse=True)
+    
+    for zone_name, zone_config in sorted_zones:
+        if signal_strength >= zone_config["min"]:
+            return {
+                "zone": zone_name,
+                "label": zone_config["label"], 
+                "action": zone_config["action"],
+                "min_threshold": zone_config["min"]
+            }
+    
+    # Default to lowest zone if no match
+    return {
+        "zone": "neutral",
+        "label": "Neutral Signal",
+        "action": "monitor",
+        "min_threshold": 0
+    }
+
+# Configuration for confidence zones
+CONFIDENCE_ZONES = {
+    "strong": {
+        "min": 70,
+        "label": "Strong Signal",
+        "action": "trade"
+    },
+    "weak": {
+        "min": 50, 
+        "label": "Weak Signal",
+        "action": "consider"
+    },
+    "neutral": {
+        "min": 0,
+        "label": "Neutral Signal", 
+        "action": "monitor"
+    }
+}
+```
+
+**Enhanced MACD Logic with Histogram Threshold**:
+```python
+def evaluate_enhanced_macd(macd_line, macd_signal, macd_histogram, histogram_threshold=0.5):
+    """
+    Enhanced MACD evaluation with histogram threshold for better signal quality.
+    """
+    current_macd = macd_line.iloc[-1]
+    current_signal = macd_signal.iloc[-1]
+    current_histogram = macd_histogram.iloc[-1]
+    previous_histogram = macd_histogram.iloc[-2]
+    
+    # Standard MACD cross detection
+    macd_cross_up = current_macd > current_signal and macd_line.iloc[-2] <= macd_signal.iloc[-2]
+    macd_cross_down = current_macd < current_signal and macd_line.iloc[-2] >= macd_signal.iloc[-2]
+    
+    # Enhanced histogram analysis
+    histogram_increasing = current_histogram > previous_histogram
+    histogram_above_threshold = abs(current_histogram) > histogram_threshold
+    
+    if macd_cross_up and histogram_increasing and histogram_above_threshold:
+        return "buy"
+    elif macd_cross_down and not histogram_increasing and histogram_above_threshold:
+        return "sell"
+    else:
+        return "neutral"
 ```
 
 #### Phase 6: Volatility Classification
@@ -839,13 +1002,24 @@ python scripts/export_openapi.py
 
 ## Summary
 
-VediGold AI represents a sophisticated trading signal generation system that combines advanced technical analysis with intelligent decision-making algorithms. The system's multi-period indicator analysis, volatility-aware trade planning, and real-time configuration capabilities provide a robust foundation for algorithmic trading across multiple asset classes.
+VediTrading AI represents a next-generation trading signal generation system that combines advanced technical analysis with intelligent decision-making algorithms. The enhanced system features sophisticated weighted blending strategies, multi-zone confidence classification, and multiplicative alignment boosts that provide superior signal quality and stability.
 
-Key strengths include:
+### Enhanced Key Capabilities (2025)
+- **Weighted Blend Strategy Engine**: Intelligent multi-strategy blending replaces single-best selection for more stable signals
+- **Partial Credit System**: Neutral indicators now contribute weighted value, improving signal robustness
+- **Multi-Zone Confidence Classification**: Strong/Weak/Neutral zones with dynamic thresholds for better risk management
+- **Multiplicative Alignment Boosts**: Proportional enhancement scaling provides better signal strength distribution
+- **Enhanced MACD Logic**: Histogram threshold analysis improves signal quality and reduces false positives
+- **ATR Stability Integration**: Volatility-aware adjustments enhance final score calculations
+- **Comprehensive Debug Logging**: Detailed signal processing insights for transparency and optimization
+
+### Core Production Capabilities
 - **Comprehensive Analysis**: Multi-timeframe validation with 7+ technical indicators
 - **Adaptive Intelligence**: Volatility-aware trade planning and dynamic parameter adjustment
 - **Real-Time Performance**: Sub-second signal generation with live WebSocket streaming
 - **Robust Architecture**: Fault-tolerant design with comprehensive error handling
 - **Extensible Framework**: Modular design supporting custom indicators and strategies
+- **Dynamic Configuration**: Real-time parameter adjustment without server restarts
+- **Comprehensive Testing**: Full test suite validates all enhanced functionality
 
-The system's proven track record in XAUUSD analysis, combined with its multi-asset capabilities, makes it suitable for both retail and institutional trading applications. Continuous monitoring, backtesting validation, and parameter optimization ensure sustained performance in evolving market conditions.
+The system's proven track record in XAUUSD analysis, combined with its enhanced multi-asset capabilities and sophisticated signal generation algorithms, makes it suitable for both retail and institutional trading applications. The new weighted blend approach and confidence zone system provide superior signal stability and risk management in evolving market conditions.

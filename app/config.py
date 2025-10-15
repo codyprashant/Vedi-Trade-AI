@@ -57,9 +57,26 @@ ALIGNMENT_BOOST_H4 = 5
 
 SIGNAL_THRESHOLD = 60  # percent
 
+# Enhanced Decision Tree Parameters
+NEUTRAL_WEIGHT_FACTOR = 0.5  # Partial credit for neutral indicators aligned with majority
+TREND_WEIGHT_RATIO = 0.6     # Weight for trend strategy in blended approach
+MOMENTUM_WEIGHT_RATIO = 0.4  # Weight for momentum strategy in blended approach
+MACD_HIST_MIN = 0.5         # Minimum MACD histogram magnitude for signal
+
+# Signal Confidence Zones
+CONFIDENCE_ZONES = {
+    "strong": {"min": 70, "label": "Strong Buy/Sell", "action": "Confirmed signal"},
+    "weak": {"min": 50, "label": "Weak Buy/Sell", "action": "Conditional/Small-size trade"},
+    "neutral": {"min": 0, "label": "Neutral", "action": "No trade"}
+}
+
+# ATR and Price Action Bonuses
+ATR_STABILITY_BONUS = 10    # Bonus when ATR stability is "normal"
+PRICE_ACTION_BONUS = 5      # Bonus when price action aligns with final direction
+
 # Logging Configuration
 DEBUG_WEBSOCKET = False  # Set to True to enable detailed WebSocket debug logs
-DEBUG_SIGNALS = True     # Set to True to enable detailed signal processing logs
+DEBUG_SIGNALS = False    # Set to True to enable detailed signal processing logs
 
 # Supabase
 SUPABASE_TABLE = "signals"

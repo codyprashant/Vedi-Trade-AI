@@ -366,8 +366,7 @@ async def poll_loop():
                         directions = {}
                         for name, r in res.items():
                             direction = r.direction
-                            if direction == "none":
-                                direction = "neutral"
+                            # Direction is already standardized to "neutral" in the codebase
                             directions[name] = direction
                         if DEBUG_WEBSOCKET:
                             print(f"WebSocket Debug - {symbol}: Directions: {directions}")
@@ -771,7 +770,8 @@ async def backtest_manual_generate(req: ManualBacktestRequest):
             sl_pips = sl_distance / pip_value
             tp_pips = tp_distance / pip_value
 
-            alignment_boost = 10.0 if h4_dir == h1_dir else -10.0
+            # Multiplicative alignment boost
+            alignment_multiplier = 1.1 if h4_dir == h1_dir else 0.9
             pa_dir = price_action_direction(df_i, lookback=5, params=INDICATOR_PARAMS)
 
             contrib_new = {
@@ -789,7 +789,8 @@ async def backtest_manual_generate(req: ManualBacktestRequest):
                 "PRICE_ACTION": (WEIGHTS.get("PRICE_ACTION", 0) if pa_dir == m15_side else 0),
             }
             base_strength = float(sum(contrib_new.values()))
-            final_strength = min(100.0, base_strength + alignment_boost)
+            final_strength = min(100.0, base_strength * alignment_multiplier)
+            alignment_boost = final_strength - base_strength  # For logging compatibility
 
             if final_strength >= float(SIGNAL_THRESHOLD):
                 records.append(
