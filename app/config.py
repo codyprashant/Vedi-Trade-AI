@@ -1,3 +1,5 @@
+import os
+
 DEFAULT_SYMBOL = "XAUUSD"
 
 # Canonical allowed symbols (use these everywhere across app/backend/frontend)
@@ -89,6 +91,24 @@ PRICE_ACTION_BONUS = 5      # Bonus when price action aligns with final directio
 # Logging Configuration
 DEBUG_WEBSOCKET = False  # Set to True to enable detailed WebSocket debug logs
 DEBUG_SIGNALS = True    # Set to True to enable detailed signal processing logs
+
+LOG_LEVEL = os.getenv("VEDI_LOG_LEVEL", "debug").lower()
+ASYNC_FETCH = os.getenv("VEDI_ASYNC_FETCH", "true").lower() == "true"
+AUTO_THRESHOLD_ENABLED = os.getenv("VEDI_AUTO_THRESHOLD", "true").lower() == "true"
+WEIGHT_LEARNING_ENABLED = os.getenv("VEDI_WEIGHT_LEARNING", "true").lower() == "true"
+WEIGHT_LR = float(os.getenv("VEDI_WEIGHT_LR", "0.05"))
+THRESH_EWMA_ALPHA = float(os.getenv("VEDI_THRESH_ALPHA", "0.2"))
+THRESH_MIN = float(os.getenv("VEDI_THRESH_MIN", "50"))
+THRESH_MAX = float(os.getenv("VEDI_THRESH_MAX", "80"))
+WEIGHT_MIN = float(os.getenv("VEDI_WEIGHT_MIN", "2.0"))
+WEIGHT_MAX = float(os.getenv("VEDI_WEIGHT_MAX", "30.0"))
+AB_ENABLED = os.getenv("VEDI_AB_ENABLED", "true").lower() == "true"
+AB_BUCKET = int(os.getenv("VEDI_AB_BUCKET", "7"))
+TS_ENABLED = os.getenv("VEDI_TS_ENABLED", "true").lower() == "true"
+ROLLBACK_ENABLED = os.getenv("VEDI_ROLLBACK_ENABLED", "true").lower() == "true"
+ROLLBACK_WINRATE_BUDGET = float(os.getenv("VEDI_ROLLBACK_BUDGET", "-5.0"))
+ROLLBACK_MIN_TRADES = int(os.getenv("VEDI_ROLLBACK_MIN_TRADES", "100"))
+ROLLBACK_WINDOW = int(os.getenv("VEDI_ROLLBACK_WINDOW", "300"))
 
 # Adaptive Threshold Manager Configuration
 THRESHOLD_MANAGER_CONFIG = {

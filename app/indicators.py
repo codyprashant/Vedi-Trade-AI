@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional
 
@@ -7,9 +9,9 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
+from . import WEIGHTS as STATIC_WEIGHTS
 from .config import (
     INDICATOR_PARAMS,
-    WEIGHTS,
     MACD_HIST_MIN,
     NEUTRAL_WEIGHT_FACTOR,
     TREND_WEIGHT_RATIO,
@@ -17,7 +19,24 @@ from .config import (
     CONFIDENCE_ZONES,
     ATR_STABILITY_BONUS,
     PRICE_ACTION_BONUS,
+    WEIGHT_LEARNING_ENABLED,
 )
+
+
+def _load_learned_weights(path: str = "data/weights_learned.json") -> Optional[Dict[str, float]]:
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, dict):
+                return {k: float(v) for k, v in data.items()}
+    except Exception:
+        return None
+    return None
+
+
+LEARNED_WEIGHTS = _load_learned_weights()
+WEIGHTS = LEARNED_WEIGHTS if (WEIGHT_LEARNING_ENABLED and LEARNED_WEIGHTS) else STATIC_WEIGHTS
 
 
 Direction = Literal["buy", "sell", "neutral", "weak_buy", "weak_sell"]
@@ -679,13 +698,20 @@ def compute_weighted_vote_aggregation(results: Dict[str, IndicatorResult], weigh
     
     # Enhanced confidence calculation
     confidence = min(abs(normalized_score) / 100.0, 1.0)
-    
+
     # Boost confidence for strong signal consensus
     if strong_signals >= 2:
         confidence = min(confidence * 1.2, 1.0)
     elif strong_signals == 1 and weak_signals >= 2:
         confidence = min(confidence * 1.1, 1.0)
-    
+
+    norm_divisor = max_possible_score if max_possible_score else 1.0
+    for details in vote_breakdown.values():
+        contribution = float(details.get("contribution", 0.0))
+        details["contribution_norm"] = (
+            contribution / norm_divisor if max_possible_score else 0.0
+        )
+
     return {
         "weighted_score": weighted_score,
         "normalized_score": normalized_score,

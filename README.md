@@ -29,6 +29,12 @@ POSTGRES_PASSWORD=<password>
 CORS_ALLOW_ORIGINS=http://localhost:3000
 ```
 
+### Configuration
+
+| Env var        | Values             | Description                     |
+|----------------|--------------------|---------------------------------|
+| `VEDI_LOG_LEVEL` | `off` / `info` / `debug` | Controls runtime log verbosity. |
+
 ## Install
 ```
 python -m venv .venv

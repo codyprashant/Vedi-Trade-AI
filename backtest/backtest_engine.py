@@ -20,6 +20,13 @@ from app.db import (
     insert_signal, fetch_signals_by_date
 )
 from app.yahoo_server import fetch_range_df
+from app.analytics.indicator_stats import IndicatorStats
+from app.analytics.auto_threshold import AutoThresholdCalibrator
+from app.analytics.weight_learner import WeightLearner
+from app.analytics.ab_regime import RegimeAB
+from app.analytics.thompson import BetaBandit
+from app.analytics.rollback import RollbackGuard
+from app import config, WEIGHTS as BASE_WEIGHTS
 
 
 logger = logging.getLogger(__name__)
@@ -31,8 +38,9 @@ class BacktestEngine:
     using live signal generation logic and simulated trade execution.
     """
     
-    def __init__(self, strategy_id: int, symbol: str, start_date: str, end_date: str, 
-                 investment: float = 10000, timeframe: str = "15m"):
+    def __init__(self, strategy_id: int, symbol: str, start_date: str, end_date: str,
+                 investment: float = 10000, timeframe: str = "15m", log_level: str = None,
+                 stats_path: str = "data/indicator_stats.json"):
         """
         Initialize the backtesting engine.
         
@@ -50,6 +58,8 @@ class BacktestEngine:
         self.end_date = datetime.fromisoformat(end_date)
         self.investment = investment
         self.timeframe = timeframe
+        self.logger = logger
+        self.log_level = (log_level or config.LOG_LEVEL).lower()
         
         # Results storage
         self.signals = []
@@ -58,8 +68,45 @@ class BacktestEngine:
         
         # Initialize signal engine for live logic reuse
         self.signal_engine = SignalEngine(fetch_range_df)
-        
-        logger.info(f"BacktestEngine initialized: {symbol} from {start_date} to {end_date}")
+        self.stats = IndicatorStats(stats_path)
+        base_threshold = getattr(self.signal_engine.threshold_manager, "base_threshold", 60.0)
+        self.calibrator = (
+            AutoThresholdCalibrator(
+                path="data/auto_threshold.json",
+                alpha=config.THRESH_EWMA_ALPHA,
+                base=base_threshold,
+                thr_min=config.THRESH_MIN,
+                thr_max=config.THRESH_MAX,
+            )
+            if config.AUTO_THRESHOLD_ENABLED
+            else None
+        )
+        self.weight_learner = (
+            WeightLearner(
+                base_weights=BASE_WEIGHTS,
+                lr=config.WEIGHT_LR,
+                w_min=config.WEIGHT_MIN,
+                w_max=config.WEIGHT_MAX,
+            )
+            if config.WEIGHT_LEARNING_ENABLED
+            else None
+        )
+        if self.weight_learner is not None:
+            self.weight_learner.snapshot()
+
+        self.ab_tracker = RegimeAB(bucket=config.AB_BUCKET) if config.AB_ENABLED else None
+        self.ts_bandit = BetaBandit() if config.TS_ENABLED else None
+        self.rollback_guard = (
+            RollbackGuard(
+                window=config.ROLLBACK_WINDOW,
+                min_trades=config.ROLLBACK_MIN_TRADES,
+                budget=config.ROLLBACK_WINRATE_BUDGET,
+            )
+            if config.ROLLBACK_ENABLED
+            else None
+        )
+
+        self.logger.info(f"BacktestEngine initialized: {symbol} from {start_date} to {end_date}")
     
     def run_backtest(self) -> Dict[str, Any]:
         """
@@ -69,7 +116,7 @@ class BacktestEngine:
             Dictionary containing backtest summary and results
         """
         try:
-            logger.info(f"Starting backtest for {self.symbol} ({self.start_date} to {self.end_date})")
+            self.logger.info(f"Starting backtest for {self.symbol} ({self.start_date} to {self.end_date})")
             
             # Step 1: Fetch historical market data
             market_data = self._fetch_market_data()
@@ -85,13 +132,13 @@ class BacktestEngine:
             # Step 4: Calculate performance metrics and store results
             summary = self.finalize()
             
-            logger.info(f"Backtest completed: {len(self.signals)} signals generated, "
-                       f"{summary['efficiency_pct']:.1f}% efficiency")
+            self.logger.info(f"Backtest completed: {len(self.signals)} signals generated, "
+                             f"{summary['efficiency_pct']:.1f}% efficiency")
             
             return summary
             
         except Exception as e:
-            logger.error(f"Backtest failed: {e}")
+            self.logger.error(f"Backtest failed: {e}")
             raise
     
     def _fetch_market_data(self) -> pd.DataFrame:
@@ -127,11 +174,11 @@ class BacktestEngine:
             # Filter to actual backtest period
             df = df[self.start_date:self.end_date]
             
-            logger.info(f"Fetched {len(df)} candles for {self.symbol}")
+            self.logger.info(f"Fetched {len(df)} candles for {self.symbol}")
             return df
             
         except Exception as e:
-            logger.error(f"Failed to fetch market data: {e}")
+            self.logger.error(f"Failed to fetch market data: {e}")
             return pd.DataFrame()
     
     def _generate_signals(self, market_data: pd.DataFrame) -> None:
@@ -183,19 +230,24 @@ class BacktestEngine:
                         'confidence': signal_result.get('confidence', 'medium'),
                         'reason': signal_result.get('reason', ''),
                         'indicators': signal_result.get('indicators', {}),
+                        'indicator_contributions': signal_result.get('indicator_contributions', {}),
+                        'metadata': signal_result.get('metadata', {}),
                         'risk_reward_ratio': signal_result.get('risk_reward_ratio', 1.0),
                         'original_entry_price': original_entry,  # Keep for reference
                         'entry_adjustment': entry_adjustment  # Track the adjustment made
                     }
                     
                     self.signals.append(signal)
-                    logger.debug(f"Generated signal: {signal['side']} at {realistic_entry_price:.2f} "
-                               f"(next bar open, adjusted from {original_entry:.2f})")
+                    if self.log_level == "debug":
+                        self.logger.debug(
+                            f"Generated signal: {signal['side']} at {realistic_entry_price:.2f} "
+                            f"(next bar open, adjusted from {original_entry:.2f})"
+                        )
             
-            logger.info(f"Generated {len(self.signals)} signals with realistic next-bar-open timing")
+            self.logger.info(f"Generated {len(self.signals)} signals with realistic next-bar-open timing")
             
         except Exception as e:
-            logger.error(f"Signal generation failed: {e}")
+            self.logger.error(f"Signal generation failed: {e}")
             raise
     
     def _evaluate_signal_for_backtest(self, historical_data: pd.DataFrame, current_timestamp) -> Optional[Dict[str, Any]]:
@@ -251,6 +303,15 @@ class BacktestEngine:
                     else:
                         return None
                 
+                metadata = signal_result.get('metadata') or {
+                    "market_regime": signal_result.get('market_regime', "unknown"),
+                    "indicator_contributions": signal_result.get('indicator_contributions', {}),
+                    "market_conditions": signal_result.get('market_conditions', {}),
+                    "threshold_factors": signal_result.get('threshold_factors', {}),
+                    "ab_arm": signal_result.get('ab_arm', 'A'),
+                    "ts_arm": signal_result.get('ts_arm', 'A'),
+                }
+
                 return {
                     'direction': direction,
                     'entry_price': entry_price,
@@ -261,6 +322,8 @@ class BacktestEngine:
                     'reason': signal_result.get('decision_summary', ''),
                     'indicators': signal_result.get('indicators', {}),
                     'threshold_factors': signal_result.get('threshold_factors', {}),
+                    'indicator_contributions': signal_result.get('indicator_contributions', {}),
+                    'metadata': metadata,
                     'validation_results': {
                         'tier1_passed': signal_result.get('tier1_passed', False),
                         'tier2_passed': signal_result.get('tier2_passed', False),
@@ -272,7 +335,7 @@ class BacktestEngine:
             return None
             
         except Exception as e:
-            logger.error(f"Error in signal evaluation: {e}")
+            self.logger.error(f"Error in signal evaluation: {e}")
             return None
     
     def simulate_trade(self, signal: Dict[str, Any], data) -> Tuple[str, float]:
@@ -365,7 +428,7 @@ class BacktestEngine:
                 return "open", future_data.iloc[-1]['close']
             
         except Exception as e:
-            logger.error(f"Trade simulation failed: {e}")
+            self.logger.error(f"Trade simulation failed: {e}")
             return "error", entry_price
     
     def _simulate_trades(self, market_data: pd.DataFrame) -> None:
@@ -396,21 +459,129 @@ class BacktestEngine:
                     "signal_id": signal['id'],
                     "result": result,
                     "profit_pct": profit_pct,
+                    "pnl": profit_pct,
                     "exit_price": exit_price,
                     "entry_price": entry_price,
                     "side": side,
-                    "timestamp": signal['timestamp']
+                    "timestamp": signal['timestamp'],
+                    "symbol": signal.get('symbol', self.symbol),
+                    "metadata": signal.get('metadata', {}),
                 }
-                
+
                 self.results.append(trade_result)
+
+                self._record_trade_outcome(signal, trade_result)
                 
-                logger.debug(f"Trade result: {result} ({profit_pct:.2f}%)")
+                if self.log_level == "debug":
+                    self.logger.debug(f"Trade result: {result} ({profit_pct:.2f}%)")
             
-            logger.info(f"Simulated {len(self.results)} trades")
-            
+            self.logger.info(f"Simulated {len(self.results)} trades")
+
         except Exception as e:
-            logger.error(f"Trade simulation failed: {e}")
+            self.logger.error(f"Trade simulation failed: {e}")
             raise
+
+    def _record_trade_outcome(self, signal: Dict[str, Any], trade: Dict[str, Any]) -> None:
+        try:
+            success = trade.get("result") == "profit"
+            indicators = signal.get("indicators", {}) if isinstance(signal, dict) else {}
+            if isinstance(indicators, dict):
+                for name, info in indicators.items():
+                    if not isinstance(name, str):
+                        continue
+                    active = True
+                    if isinstance(info, dict):
+                        active = bool(info.get("active", True))
+                    elif hasattr(info, "get"):
+                        try:
+                            active = bool(info.get("active", True))  # type: ignore[call-arg]
+                        except Exception:
+                            active = True
+                    if active:
+                        self.stats.record(name, success)
+            self.stats.save()
+
+            metadata: Dict[str, Any] = {}
+            if isinstance(signal, dict):
+                metadata.update(signal.get("metadata", {}) or {})
+                metadata.setdefault(
+                    "indicator_contributions",
+                    signal.get("indicator_contributions") or {},
+                )
+            if isinstance(trade, dict):
+                trade_meta = trade.get("metadata", {}) or {}
+                metadata.update(trade_meta)
+                metadata.setdefault(
+                    "indicator_contributions",
+                    trade_meta.get("indicator_contributions", {}),
+                )
+
+            symbol = trade.get("symbol") or (signal.get("symbol") if isinstance(signal, dict) else None)
+            regime = metadata.get("market_regime", "unknown")
+            ab_arm = metadata.get("ab_arm", "A")
+            ts_arm = metadata.get("ts_arm", "A")
+            if self.calibrator is not None and config.AUTO_THRESHOLD_ENABLED and symbol:
+                self.calibrator.update(symbol, regime, success)
+                self.calibrator.save()
+
+            contributions = metadata.get("indicator_contributions") or {}
+            if not contributions and isinstance(signal, dict):
+                contributions = signal.get("indicator_contributions", {}) or {}
+            if self.weight_learner is not None and config.WEIGHT_LEARNING_ENABLED and contributions:
+                pnl = float(trade.get("pnl", trade.get("profit_pct", 0.0)))
+                reward = 1.0 if pnl > 0 else -1.0 if pnl < 0 else 0.0
+                # Ensure contributions are floats for stable updates
+                numeric_contrib = {k: float(v) for k, v in contributions.items()}
+                self.weight_learner.update(numeric_contrib, reward)
+                self.weight_learner.save()
+
+            if self.ab_tracker is not None and config.AB_ENABLED and symbol:
+                self.ab_tracker.record(symbol, regime, ab_arm, success)
+                self.ab_tracker.save()
+                self.logger.info(
+                    {
+                        "event": "ab_outcome",
+                        "symbol": symbol,
+                        "regime": regime,
+                        "arm": ab_arm,
+                        "success": success,
+                        "wr_A": self.ab_tracker.wr(symbol, regime, "A"),
+                        "wr_B": self.ab_tracker.wr(symbol, regime, "B"),
+                    }
+                )
+
+            if self.ts_bandit is not None and config.TS_ENABLED:
+                self.ts_bandit.update(ts_arm, success)
+                self.ts_bandit.save()
+
+            baseline_success = metadata.get("baseline_success")
+            if baseline_success is None:
+                baseline_success = success if ab_arm == "A" else metadata.get("baseline_result", success)
+            if isinstance(baseline_success, str):
+                baseline_flag = baseline_success.lower() in {"true", "1", "profit", "win", "success"}
+            else:
+                baseline_flag = bool(baseline_success)
+
+            if self.rollback_guard is not None:
+                self.rollback_guard.record(success, baseline_flag)
+                triggered = False
+                if (
+                    config.ROLLBACK_ENABLED
+                    and self.weight_learner is not None
+                    and self.rollback_guard.should_rollback()
+                ):
+                    self.weight_learner.restore("data/weights_learned.snap.json")
+                    triggered = True
+                self.rollback_guard.save()
+                self.logger.info(
+                    {
+                        "event": "rollback",
+                        "delta_wr": self.rollback_guard.delta_wr(),
+                        "activated": triggered,
+                    }
+                )
+        except Exception:
+            self.logger.debug("Failed to record indicator stats", exc_info=True)
     
     def finalize(self) -> Dict[str, Any]:
         """
@@ -468,13 +639,13 @@ class BacktestEngine:
                 "avg_return_per_trade": avg_return
             }
             
-            logger.info(f"Backtest finalized: {efficiency:.1f}% efficiency, "
-                       f"{total_return*100:.2f}% total return")
+            self.logger.info(f"Backtest finalized: {efficiency:.1f}% efficiency, "
+                             f"{total_return*100:.2f}% total return")
             
             return summary
             
         except Exception as e:
-            logger.error(f"Backtest finalization failed: {e}")
+            self.logger.error(f"Backtest finalization failed: {e}")
             raise
     
     def _store_backtest_results(self, total_return_pct: float, efficiency_pct: float,
@@ -519,11 +690,11 @@ class BacktestEngine:
                             str(signal.get('reason', ''))
                         ))
                     
-                    logger.info(f"Stored backtest results with ID: {backtest_id}")
+                    self.logger.info(f"Stored backtest results with ID: {backtest_id}")
                     return backtest_id
                     
         except Exception as e:
-            logger.error(f"Failed to store backtest results: {e}")
+            self.logger.error(f"Failed to store backtest results: {e}")
             raise
         finally:
             _put_conn(conn)

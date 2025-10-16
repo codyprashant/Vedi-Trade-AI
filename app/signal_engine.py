@@ -24,6 +24,10 @@ from .config import (
     PRICE_ACTION_BONUS,
     CONFIDENCE_ZONES,
     DEBUG_SIGNALS,
+    ASYNC_FETCH,
+    AB_ENABLED,
+    AB_BUCKET,
+    TS_ENABLED,
 )
 from .logging_config import get_logger, log_signal_event, log_performance, safe_log_value
 from .utils_time import as_utc_index, last_closed, safe_float, compute_bounded_alignment_boost
@@ -43,8 +47,10 @@ from .db import insert_signal
 from .db import insert_indicator_snapshot
 from .db import get_active_strategy_config
 from .threshold_manager import ThresholdManagerFactory, ThresholdManager
-from .sanity_filter import SignalSanityFilterFactory
+from .sanity_filter import SignalSanityFilterFactory, apply_sanity_overrides
 from .mtf_confirmation import MultiTimeframeConfirmation
+from .analytics.ab_regime import RegimeAB
+from .analytics.thompson import BetaBandit
 
 
 def _calibrate_conf(strength: float, strong_count: int) -> float:
@@ -71,12 +77,24 @@ def _ts_changed(prev, curr):
 
 
 class SignalEngine:
-    def __init__(self, fetch_history_func):
+    def __init__(
+        self,
+        fetch_history_func,
+        threshold_manager: Optional[ThresholdManager] = None,
+        sanity_filter: Optional[Any] = None,
+        mtf_confirmation: Optional[MultiTimeframeConfirmation] = None,
+    ):
         """
         fetch_history_func(symbol: str, timeframe: str, count: int) -> pd.DataFrame
         Expected df columns: time (ns or iso), open, high, low, close, volume
         """
-        self.fetch_history = fetch_history_func
+        if callable(fetch_history_func):
+            self.fetch_history = fetch_history_func
+        elif hasattr(fetch_history_func, "fetch_history") and callable(getattr(fetch_history_func, "fetch_history")):
+            self.fetch_history = getattr(fetch_history_func, "fetch_history")
+        else:
+            raise TypeError("fetch_history_func must be callable or expose a callable 'fetch_history'")
+        self._batch_fetch = getattr(fetch_history_func, "fetch_batch_sync", None)
         self.running = False
         self.h1_cache_by_symbol: Dict[str, Dict[str, Any]] = {}
         self.h4_cache_by_symbol: Dict[str, Dict[str, Any]] = {}
@@ -84,16 +102,39 @@ class SignalEngine:
         # Metrics tracking per symbol
         self.attempt_counts_by_symbol: Dict[str, int] = {}
         self.signal_counts_by_symbol: Dict[str, int] = {}
-        
+
         # Initialize adaptive threshold and filtering components with configuration
         from .config import THRESHOLD_MANAGER_CONFIG, SANITY_FILTER_CONFIG
-        self.threshold_manager = ThresholdManagerFactory.create_from_config(THRESHOLD_MANAGER_CONFIG)
-        self.sanity_filter = SignalSanityFilterFactory.create_from_config(SANITY_FILTER_CONFIG["strict"])
-        self.mtf_confirmation = MultiTimeframeConfirmation()
+        self.threshold_manager = threshold_manager or ThresholdManagerFactory.create_from_config(
+            THRESHOLD_MANAGER_CONFIG
+        )
+        self.sanity_filter = sanity_filter or SignalSanityFilterFactory.create_from_config(
+            SANITY_FILTER_CONFIG["strict"]
+        )
+        self.mtf_confirmation = mtf_confirmation or MultiTimeframeConfirmation()
         self.debug = DEBUG_SIGNALS
 
         # Initialize logger
         self.logger = get_logger('signals')
+        self._ab_tracker = RegimeAB(path="data/ab_regime.json", bucket=AB_BUCKET) if AB_ENABLED else None
+        self._ts_bandit = BetaBandit() if TS_ENABLED else None
+
+    def _batch_fetch_symbols(self, symbols, timeframe, count):
+        if not (ASYNC_FETCH and callable(self._batch_fetch)):
+            return None
+        try:
+            data = self._batch_fetch(symbols, timeframe=timeframe, count=count)
+        except TypeError:
+            try:
+                data = self._batch_fetch(symbols, timeframe=timeframe)
+            except TypeError:
+                data = self._batch_fetch(symbols)
+        except Exception:
+            self.logger.debug("Batch fetch failed; falling back to sequential requests", exc_info=True)
+            return None
+        if isinstance(data, dict):
+            return data
+        return None
 
     def _confidence_zone(self, confidence: float, final_strength: float) -> str:
         """Map confidence to qualitative zones using configured strength bands."""
@@ -126,6 +167,9 @@ class SignalEngine:
 
                 # Iterate over configured symbols and evaluate
                 symbols: List[str] = strategy.get("symbols", ALLOWED_SYMBOLS)
+                batch_primary = self._batch_fetch_symbols(symbols, primary_tf, DEFAULT_HISTORY_COUNT)
+                batch_confirm = self._batch_fetch_symbols(symbols, confirmation_tf, DEFAULT_HISTORY_COUNT)
+                batch_trend = self._batch_fetch_symbols(symbols, trend_tf, DEFAULT_HISTORY_COUNT)
                 for sym in symbols:
                     # Track attempts
                     self.attempt_counts_by_symbol[sym] = int(self.attempt_counts_by_symbol.get(sym, 0)) + 1
@@ -134,12 +178,22 @@ class SignalEngine:
                     confidence_status = "Not calculated"
                     decision_summary = "No signal generated"
                     # Fetch M15/H1/H4 concurrently for each symbol, capturing per-timeframe statuses
-                    fetch_tasks = [
-                        asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
-                        asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
-                        asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
-                    ]
-                    m15_res, h1_res, h4_res = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+                    use_prefetched = (
+                        batch_primary is not None and sym in batch_primary
+                        and batch_confirm is not None and sym in batch_confirm
+                        and batch_trend is not None and sym in batch_trend
+                    )
+                    if use_prefetched:
+                        m15_res = batch_primary[sym]
+                        h1_res = batch_confirm[sym]
+                        h4_res = batch_trend[sym]
+                    else:
+                        fetch_tasks = [
+                            asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
+                            asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
+                            asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
+                        ]
+                        m15_res, h1_res, h4_res = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
                     # Build fetch status report
                     def _df_state(res, tf):
@@ -937,6 +991,375 @@ class SignalEngine:
             except Exception:
                 await asyncio.sleep(5)
 
+    def evaluate_symbol(
+        self,
+        sym: str,
+        primary_tf: str = PRIMARY_TIMEFRAME,
+        confirmation_tf: str = CONFIRMATION_TIMEFRAME,
+        trend_tf: str = TREND_TIMEFRAME,
+        indicator_params: Optional[Dict[str, Any]] = None,
+        weights: Optional[Dict[str, Any]] = None,
+        history_count: int = DEFAULT_HISTORY_COUNT,
+    ) -> Dict[str, Any]:
+        """Evaluate a single symbol synchronously and emit structured logs."""
+
+        indicator_params = indicator_params or {}
+        weights = weights or WEIGHTS
+
+        start_ts = time.perf_counter()
+        timings: Dict[str, float] = {}
+        result: Dict[str, Any] = {
+            "symbol": sym,
+            "timeframe": primary_tf,
+            "had_signal": False,
+        }
+
+        try:
+            t_fetch = time.perf_counter()
+            m15_df = self.fetch_history(sym, primary_tf, history_count)
+            h1_df = self.fetch_history(sym, confirmation_tf, history_count)
+            h4_df = self.fetch_history(sym, trend_tf, history_count)
+            timings["fetch_data"] = (time.perf_counter() - t_fetch) * 1000
+
+            if not all(isinstance(df, pd.DataFrame) for df in (m15_df, h1_df, h4_df)):
+                result["status"] = "insufficient_data"
+                return result
+
+            if any(len(df) < 50 for df in (m15_df, h1_df, h4_df)):
+                result["status"] = "insufficient_data"
+                return result
+
+            m15_df = as_utc_index(m15_df)
+            h1_df = as_utc_index(h1_df)
+            h4_df = as_utc_index(h4_df)
+
+            try:
+                anchor = min(
+                    last_closed(m15_df.index[-1], "15min"),
+                    last_closed(h1_df.index[-1], "1h"),
+                    last_closed(h4_df.index[-1], "4h"),
+                )
+                m15_df = m15_df.loc[:anchor]
+                h1_df = h1_df.loc[:anchor]
+                h4_df = h4_df.loc[:anchor]
+            except Exception:
+                result["status"] = "alignment_error"
+                return result
+
+            if any(len(df) < 50 for df in (m15_df, h1_df, h4_df)):
+                result["status"] = "insufficient_data_after_alignment"
+                return result
+            timings["fetch_data"] = (time.perf_counter() - t_fetch) * 1000
+
+            h1_dir = ema_trend_direction(h1_df, short_len=50, long_len=200)
+            h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
+
+            t_indicator = time.perf_counter()
+            ind = compute_indicators(m15_df, indicator_params)
+            res = evaluate_signals(m15_df, ind, indicator_params)
+            timings["indicator_eval"] = (time.perf_counter() - t_indicator) * 1000
+
+            t_aggregation = time.perf_counter()
+            vote_result = compute_weighted_vote_aggregation(
+                res, weights, threshold=self.threshold_manager.base_threshold
+            )
+
+            strat = compute_strategy_strength(res, weights)
+            best = best_signal(strat)
+            timings["aggregation"] = (time.perf_counter() - t_aggregation) * 1000
+
+            if not best or best.get("direction") not in ("buy", "sell"):
+                confidence_value = float(vote_result.get("confidence", 0.0))
+                confidence_zone = self._confidence_zone(confidence_value, 0.0)
+                self.logger.debug({
+                    "event": "confidence",
+                    "symbol": sym,
+                    "value": confidence_value,
+                    "zone": confidence_zone,
+                })
+                self.logger.debug({
+                    "event": "final_signal",
+                    "symbol": sym,
+                    "timeframe": primary_tf,
+                    "decision": "none",
+                    "final_strength": 0.0,
+                    "threshold": float(self.threshold_manager.base_threshold),
+                    "confidence": confidence_value,
+                    "zone": confidence_zone,
+                    "blocked_reason": "best_direction_missing",
+                })
+                return result
+
+            m15_side = best["direction"]
+            base_strength = float(best.get("strength", 0.0))
+
+            t_threshold = time.perf_counter()
+
+            h1_atr_last, h1_atr_mean50 = atr_last_and_mean(
+                h1_df,
+                length=indicator_params.get("ATR", {}).get("length", 14),
+                mean_window=50,
+                params=indicator_params,
+            )
+            atr_ratio = float(h1_atr_last / h1_atr_mean50) if h1_atr_mean50 else 1.0
+
+            rsi_value = res.get("RSI").value.get("rsi", 50.0) if "RSI" in res else 50.0
+            rsi_deviation = abs(rsi_value - 50.0) / 50.0
+            macd_hist = res.get("MACD").value.get("histogram", 0.0) if "MACD" in res else 0.0
+            macd_deviation = min(abs(macd_hist) * 1000, 1.0)
+
+            preliminary_threshold, _ = self.threshold_manager.compute_adaptive_threshold(
+                atr_ratio=atr_ratio,
+                rsi_deviation=rsi_deviation,
+                macd_histogram=macd_deviation,
+                price_ma_deviation=0.0,
+                symbol=sym,
+                timeframe=primary_tf,
+            )
+
+            vote_result = compute_weighted_vote_aggregation(res, weights, threshold=preliminary_threshold)
+
+            h4_aligned = h4_dir == h1_dir
+            aligns_h1 = (
+                (m15_side == "buy" and h1_dir == "Bullish")
+                or (m15_side == "sell" and h1_dir == "Bearish")
+            )
+            alignment_multiplier, _ = compute_bounded_alignment_boost(
+                base_strength=base_strength,
+                h1_aligned=aligns_h1,
+                h4_aligned=h4_aligned,
+                atr_ratio=atr_ratio,
+                boost_config=ALIGNMENT_BOOST_CONFIG,
+            )
+            final_strength = float(min(100.0, base_strength * alignment_multiplier))
+            timings["thresholding"] = (time.perf_counter() - t_threshold) * 1000
+
+            strong_count = int(vote_result.get("strong_signals", 0))
+            confidence_value = float(_calibrate_conf(final_strength, strong_count))
+            confidence_zone = self._confidence_zone(confidence_value, final_strength)
+
+            market_conditions = {
+                "atr_ratio": atr_ratio,
+                "rsi_deviation": rsi_deviation,
+                "macd_histogram": macd_deviation,
+                "price_ma_deviation": 0.0,
+            }
+            dynamic_threshold, threshold_factors = self.threshold_manager.compute_dynamic_threshold_with_votes(
+                vote_result=vote_result,
+                market_conditions=market_conditions,
+                symbol=sym,
+                timeframe=primary_tf,
+            )
+
+            regime = (
+                threshold_factors.get("enhanced_volatility_analysis", {})
+                .get("volatility_regime", {})
+                .get("regime", "unknown")
+            )
+            market_conditions["regime"] = regime
+            vote_breakdown = vote_result.get("vote_breakdown", {})
+            indicator_contributions = {
+                name: float(details.get("contribution_norm", 0.0))
+                for name, details in vote_breakdown.items()
+            }
+            vote_result["indicator_contributions"] = indicator_contributions
+            vote_result["market_conditions"] = dict(market_conditions)
+            vote_result["threshold_metadata"] = threshold_factors
+            ab_arm = "A"
+            ts_arm = "A"
+            sanity_overrides: Dict[str, Any] = {}
+            mtf_floor_override: Optional[float] = None
+            if AB_ENABLED:
+                if self._ab_tracker is None:
+                    self._ab_tracker = RegimeAB(path="data/ab_regime.json", bucket=AB_BUCKET)
+                ab_arm = self._ab_tracker.assign(sym, regime, seed=primary_tf)
+            if TS_ENABLED:
+                if self._ts_bandit is None:
+                    self._ts_bandit = BetaBandit()
+                ts_arm = self._ts_bandit.sample_arm()
+            if ab_arm == "B" and TS_ENABLED and ts_arm == "B":
+                sanity_overrides = {
+                    "min_body_ratio": {"scale": 0.9},
+                    "min_directional_body_ratio": {"scale": 0.9},
+                    "max_wick_to_body_ratio": {"scale": 1.1},
+                    "min_confidence": {"scale": 0.95},
+                }
+                mtf_floor_override = max(0.6, self.mtf_confirmation.confirmation_floor - 0.05)
+            if AB_ENABLED or TS_ENABLED:
+                self.logger.info(
+                    {
+                        "event": "ab_assign",
+                        "symbol": sym,
+                        "regime": regime,
+                        "arm": ab_arm,
+                        "ts_arm": ts_arm,
+                    }
+                )
+            vote_result["ab_arm"] = ab_arm
+            vote_result["ts_arm"] = ts_arm
+
+            threshold_change = float(dynamic_threshold - self.threshold_manager.base_threshold)
+            self.logger.debug({
+                "event": "threshold_analysis",
+                "symbol": sym,
+                "base": float(self.threshold_manager.base_threshold),
+                "final": float(dynamic_threshold),
+                "delta": threshold_change,
+                "atr_ratio": float(atr_ratio),
+                "rsi_deviation": float(rsi_deviation),
+                "vote_adj_total": float(threshold_factors.get("vote_adjustments", {}).get("total_adjustment", 0.0)),
+                "market_regime": regime,
+            })
+
+            last_candle = {
+                "open": float(m15_df.iloc[-1]["open"]),
+                "high": float(m15_df.iloc[-1]["high"]),
+                "low": float(m15_df.iloc[-1]["low"]),
+                "close": float(m15_df.iloc[-1]["close"]),
+            }
+
+            t_mtf = time.perf_counter()
+            original_floor = self.mtf_confirmation.confirmation_floor
+            with apply_sanity_overrides(self.sanity_filter, sanity_overrides):
+                if mtf_floor_override is not None:
+                    self.mtf_confirmation.set_confirmation_floor(mtf_floor_override)
+                try:
+                    sanity_passed, filter_reason, validation_metadata = self.sanity_filter.validate_signal(
+                        candle=last_candle,
+                        atr=float(h1_atr_last),
+                        direction_confidence=final_strength,
+                        signal_strength=final_strength,
+                        symbol=sym,
+                        additional_data={
+                            "signal_direction": m15_side,
+                            "h1_alignment": aligns_h1,
+                            "volatility_regime": "normal",
+                            "atr_ratio": atr_ratio,
+                        },
+                    )
+                finally:
+                    if mtf_floor_override is not None:
+                        self.mtf_confirmation.set_confirmation_floor(original_floor)
+
+            sanity_payload = {
+                key: (float(value) if isinstance(value, (int, float)) else value)
+                for key, value in (validation_metadata or {}).items()
+            }
+            self.logger.debug({
+                "event": "sanity_check",
+                "symbol": sym,
+                "passed": bool(sanity_passed),
+                "reasons": filter_reason,
+                **sanity_payload,
+            })
+
+            self.logger.debug({
+                "event": "confidence",
+                "symbol": sym,
+                "value": confidence_value,
+                "zone": confidence_zone,
+            })
+
+            timestamp = pd.to_datetime(m15_df.index[-1]).to_pydatetime()
+            mtf_result = self.mtf_confirmation.confirm_signal(
+                symbol=sym,
+                timeframe=primary_tf,
+                direction=m15_side.upper(),
+                confidence=confidence_value,
+                timestamp=timestamp,
+            )
+
+            decision = "none"
+            blocked_reason: Optional[str] = None
+            if final_strength < float(dynamic_threshold):
+                blocked_reason = "threshold_gate"
+            elif not sanity_passed:
+                blocked_reason = "sanity_gate"
+            elif not mtf_result.confirmed:
+                blocked_reason = "mtf_gate"
+            else:
+                decision = m15_side
+
+            if blocked_reason:
+                self.logger.debug({
+                    "event": "block_analysis",
+                    "symbol": sym,
+                    "threshold_gap": float(dynamic_threshold - final_strength),
+                    "base_threshold": float(self.threshold_manager.base_threshold),
+                    "threshold_adjustment": threshold_change,
+                    "market_regime": market_conditions.get("regime", "unknown"),
+                    "volatility_state": "normal",
+                    "atr_ratio": float(atr_ratio),
+                })
+
+            timings["mtf_sanity"] = (time.perf_counter() - t_mtf) * 1000
+
+            t_finalize = time.perf_counter()
+            had_signal = decision in ("buy", "sell")
+            result.update(
+                {
+                    "decision": decision,
+                    "final_strength": final_strength,
+                    "confidence": confidence_value,
+                    "threshold": float(dynamic_threshold),
+                    "sanity_passed": bool(sanity_passed),
+                    "mtf_confirmed": bool(mtf_result.confirmed),
+                    "blocked_reason": blocked_reason,
+                    "had_signal": had_signal,
+                    "confidence_passed": had_signal,
+                    "ab_arm": ab_arm,
+                    "ts_arm": ts_arm,
+                }
+            )
+            result["indicator_contributions"] = indicator_contributions
+            result["market_conditions"] = dict(market_conditions)
+            result["threshold_factors"] = threshold_factors
+            result["market_regime"] = regime
+            result["vote_result"] = vote_result
+            result["metadata"] = {
+                "market_regime": regime,
+                "indicator_contributions": indicator_contributions,
+                "market_conditions": dict(market_conditions),
+                "threshold_factors": threshold_factors,
+                "ab_arm": ab_arm,
+                "ts_arm": ts_arm,
+            }
+            timings["finalize"] = (time.perf_counter() - t_finalize) * 1000
+
+            self.logger.debug({
+                "event": "final_signal",
+                "symbol": sym,
+                "timeframe": primary_tf,
+                "decision": decision,
+                "final_strength": final_strength,
+                "threshold": float(dynamic_threshold),
+                "confidence": confidence_value,
+                "zone": confidence_zone,
+                "blocked_reason": blocked_reason,
+                "market_regime": regime,
+                "indicator_contributions": indicator_contributions,
+            })
+
+            return result
+        finally:
+            elapsed = (time.perf_counter() - start_ts) * 1000
+            timings["total_ms"] = elapsed
+            profiling_payload = {k: round(v, 2) for k, v in timings.items()}
+            self.logger.info({"event": "profiling", "symbol": sym, **profiling_payload})
+            decision = result.get("decision", "none")
+            confidence_val = float(result.get("confidence", 0.0))
+            final_strength = float(result.get("final_strength", 0.0))
+            self.logger.info(
+                {
+                    "event": "perf",
+                    "symbol": sym,
+                    "elapsed_ms": round(elapsed, 2),
+                    "decision": decision,
+                    "confidence": confidence_val,
+                    "final_strength": final_strength,
+                }
+            )
+
     def stop(self):
         self.running = False
 
@@ -956,6 +1379,9 @@ class SignalEngine:
 
             # Iterate over configured or overridden symbols
             symbols: List[str] = symbols_override or strategy.get("symbols", ALLOWED_SYMBOLS)
+            batch_primary = self._batch_fetch_symbols(symbols, primary_tf, DEFAULT_HISTORY_COUNT)
+            batch_confirm = self._batch_fetch_symbols(symbols, confirmation_tf, DEFAULT_HISTORY_COUNT)
+            batch_trend = self._batch_fetch_symbols(symbols, trend_tf, DEFAULT_HISTORY_COUNT)
             for sym in symbols:
                 # Track attempts
                 self.attempt_counts_by_symbol[sym] = int(self.attempt_counts_by_symbol.get(sym, 0)) + 1
@@ -968,12 +1394,22 @@ class SignalEngine:
                 volatility_state = "Normal"
                 rr = 1.5
                 # Fetch M15/H1/H4 concurrently for each symbol, capturing per-timeframe statuses
-                fetch_tasks = [
-                    asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
-                    asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
-                    asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
-                ]
-                m15_res, h1_res, h4_res = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+                use_prefetched = (
+                    batch_primary is not None and sym in batch_primary
+                    and batch_confirm is not None and sym in batch_confirm
+                    and batch_trend is not None and sym in batch_trend
+                )
+                if use_prefetched:
+                    m15_res = batch_primary[sym]
+                    h1_res = batch_confirm[sym]
+                    h4_res = batch_trend[sym]
+                else:
+                    fetch_tasks = [
+                        asyncio.to_thread(self.fetch_history, sym, primary_tf, DEFAULT_HISTORY_COUNT),
+                        asyncio.to_thread(self.fetch_history, sym, confirmation_tf, DEFAULT_HISTORY_COUNT),
+                        asyncio.to_thread(self.fetch_history, sym, trend_tf, DEFAULT_HISTORY_COUNT),
+                    ]
+                    m15_res, h1_res, h4_res = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
                 def _df_state(res, tf):
                     if isinstance(res, Exception):

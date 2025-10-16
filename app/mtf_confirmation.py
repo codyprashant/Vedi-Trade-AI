@@ -58,12 +58,13 @@ class MultiTimeframeConfirmation:
     - Prevents rapid signal flip-flops in choppy markets
     """
     
-    def __init__(self, 
+    def __init__(self,
                  consistency_window_minutes: int = 60,
                  min_consecutive_signals: int = 2,
                  alignment_boost: float = 1.1,
                  flip_penalty: float = 0.8,
-                 higher_tf_weight: float = 1.2):
+                 higher_tf_weight: float = 1.2,
+                 confirmation_floor: float = 0.9):
         """
         Initialize multi-timeframe confirmation system
         
@@ -79,9 +80,13 @@ class MultiTimeframeConfirmation:
         self.alignment_boost = alignment_boost
         self.flip_penalty = flip_penalty
         self.higher_tf_weight = higher_tf_weight
-        
+        self.confirmation_floor = confirmation_floor
+
         # Signal history storage (in production, this would be database-backed)
         self.signal_history: Dict[str, List[SignalHistory]] = {}
+
+    def set_confirmation_floor(self, floor: float) -> None:
+        self.confirmation_floor = max(0.0, min(1.0, float(floor)))
         
     def add_signal_to_history(self, symbol: str, timeframe: str, direction: str, 
                             confidence: float, timestamp: datetime = None):
@@ -255,7 +260,7 @@ class MultiTimeframeConfirmation:
         confirmed = (
             consecutive_count >= 1 and  # At least some consistency
             consistency_score >= 0.3 and  # Reasonable consistency ratio
-            confidence_adjustment >= 0.9  # Not too heavily penalized
+            confidence_adjustment >= self.confirmation_floor  # Not too heavily penalized
         )
         
         # Generate reason

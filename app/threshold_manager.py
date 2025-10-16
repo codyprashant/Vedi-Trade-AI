@@ -9,6 +9,9 @@ import logging
 from typing import Dict, Any, Tuple
 import numpy as np
 
+from .analytics.auto_threshold import AutoThresholdCalibrator
+from . import config
+
 logger = logging.getLogger(__name__)
 
 class ThresholdManager:
@@ -67,6 +70,16 @@ class ThresholdManager:
         logger.info(f"ThresholdManager initialized: base={base_threshold}, "
                    f"atr_factor={atr_factor}, range=[{min_threshold}, {max_threshold}], "
                    f"stress_detection={stress_detection_enabled}, adaptive={adaptive_parameters}")
+
+        self._auto = None
+        if config.AUTO_THRESHOLD_ENABLED:
+            self._auto = AutoThresholdCalibrator(
+                path="data/auto_threshold.json",
+                alpha=config.THRESH_EWMA_ALPHA,
+                base=self.base_threshold,
+                thr_min=config.THRESH_MIN,
+                thr_max=config.THRESH_MAX,
+            )
     
     def classify_volatility_regime(self, atr_ratio: float) -> Tuple[str, Dict[str, Any]]:
         """
@@ -485,12 +498,20 @@ class ThresholdManager:
             
             # Apply vote adjustments to base threshold
             dynamic_threshold = base_threshold + vote_adjustments['total_adjustment']
-            
+
             # Ensure threshold stays within expanded dynamic range [45, 75]
             dynamic_min = 45.0
             dynamic_max = 75.0
             clamped_threshold = max(dynamic_min, min(dynamic_max, dynamic_threshold))
-            
+
+            auto_threshold = None
+            regime = base_metadata.get("enhanced_volatility_analysis", {}).get(
+                "volatility_regime", {}
+            ).get("regime", "unknown")
+            if self._auto is not None and config.AUTO_THRESHOLD_ENABLED:
+                auto_threshold = self._auto.threshold(symbol, regime)
+                clamped_threshold = max(clamped_threshold, auto_threshold)
+
             # Create comprehensive metadata
             metadata = {
                 **base_metadata,
@@ -504,7 +525,9 @@ class ThresholdManager:
                 "final_threshold": clamped_threshold,
                 "dynamic_range": [dynamic_min, dynamic_max],
                 "was_vote_clamped": clamped_threshold != dynamic_threshold,
-                "market_conditions": market_conditions
+                "market_conditions": market_conditions,
+                "auto_threshold": auto_threshold,
+                "auto_threshold_regime": regime,
             }
             
             logger.debug(f"Dynamic threshold for {symbol} {timeframe}: "
