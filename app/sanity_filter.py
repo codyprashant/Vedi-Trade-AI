@@ -7,6 +7,7 @@ signal opportunities during strong market conditions.
 """
 
 import logging
+from contextlib import contextmanager
 from typing import Dict, Any, Tuple, List, Optional
 import numpy as np
 from datetime import datetime, timedelta
@@ -895,3 +896,32 @@ class SignalSanityFilterFactory:
             # Volatility adaptation
             volatility_adaptation=config.get('volatility_adaptation')
         )
+
+
+@contextmanager
+def apply_sanity_overrides(
+    filter_obj: SignalSanityFilter, overrides: Optional[Dict[str, Any]] = None
+):
+    """Temporarily adjust sanity filter thresholds."""
+
+    if not overrides:
+        yield filter_obj
+        return
+
+    original_values: Dict[str, Any] = {}
+    try:
+        for attr, rule in overrides.items():
+            if not hasattr(filter_obj, attr):
+                continue
+            original_values[attr] = getattr(filter_obj, attr)
+            if isinstance(rule, dict):
+                if "set" in rule:
+                    setattr(filter_obj, attr, rule["set"])
+                elif "scale" in rule:
+                    setattr(filter_obj, attr, original_values[attr] * float(rule["scale"]))
+            elif isinstance(rule, (int, float)):
+                setattr(filter_obj, attr, original_values[attr] * float(rule))
+        yield filter_obj
+    finally:
+        for attr, value in original_values.items():
+            setattr(filter_obj, attr, value)

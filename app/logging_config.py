@@ -13,6 +13,12 @@ import json
 import traceback
 from typing import Dict, Any, Optional
 
+from app import config
+
+_LEVEL_MAP = {"off": logging.CRITICAL + 1, "info": logging.INFO, "debug": logging.DEBUG}
+level = _LEVEL_MAP.get(config.LOG_LEVEL, logging.DEBUG)
+logging.getLogger().setLevel(level)
+
 
 class JSONFormatter(logging.Formatter):
     """Custom JSON formatter for structured logging."""
@@ -66,7 +72,7 @@ class SafeNaNFormatter(logging.Formatter):
 
 
 def setup_logging(
-    log_level: str = "INFO",
+    log_level: str = config.LOG_LEVEL.upper(),
     log_dir: Optional[str] = None,
     enable_json: bool = False,
     enable_console: bool = True,
@@ -98,7 +104,8 @@ def setup_logging(
     
     # Configure root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, log_level.upper()))
+    level_value = _LEVEL_MAP.get(str(log_level).lower(), logging.DEBUG)
+    root_logger.setLevel(level_value)
     
     # Clear existing handlers
     root_logger.handlers.clear()
@@ -110,7 +117,8 @@ def setup_logging(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         console_handler.setFormatter(console_formatter)
-        console_handler.setLevel(getattr(logging, log_level.upper()))
+        console_level = _LEVEL_MAP.get(str(log_level).lower(), logging.DEBUG)
+        console_handler.setLevel(console_level)
         root_logger.addHandler(console_handler)
     
     # File handlers
@@ -118,7 +126,7 @@ def setup_logging(
         {
             'name': 'main',
             'filename': log_dir / 'trading_app.log',
-            'level': log_level.upper(),
+            'level': log_level.upper() if str(log_level).lower() != 'off' else 'CRITICAL',
             'format_type': 'json' if enable_json else 'standard'
         },
         {
