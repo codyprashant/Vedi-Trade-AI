@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import traceback
 from typing import Dict, Any, Optional, List
 
 import pandas as pd
@@ -13,7 +12,6 @@ from .config import (
     ALLOWED_SYMBOLS,
     DEFAULT_TIMEFRAME,
     DEFAULT_HISTORY_COUNT,
-    SIGNAL_THRESHOLD,
     WEIGHTS,
     SUPABASE_TABLE,
     PRIMARY_TIMEFRAME,
@@ -47,6 +45,15 @@ from .db import get_active_strategy_config
 from .threshold_manager import ThresholdManagerFactory, ThresholdManager
 from .sanity_filter import SignalSanityFilterFactory
 from .mtf_confirmation import MultiTimeframeConfirmation
+
+
+def _calibrate_conf(strength: float, strong_count: int) -> float:
+    """Calibrate raw signal strength into a normalized confidence score."""
+    strength = float(strength)
+    strong_count = float(strong_count)
+    s = max(0.0, min(1.0, strength / 100.0))
+    c = 0.6 * s + 0.4 * max(0.0, min(1.0, strong_count / 4.0))
+    return max(0.0, min(1.0, c))
 
 
 def _ts_changed(prev, curr):
@@ -84,9 +91,20 @@ class SignalEngine:
         self.sanity_filter = SignalSanityFilterFactory.create_from_config(SANITY_FILTER_CONFIG["strict"])
         self.mtf_confirmation = MultiTimeframeConfirmation()
         self.debug = DEBUG_SIGNALS
-        
+
         # Initialize logger
         self.logger = get_logger('signals')
+
+    def _confidence_zone(self, confidence: float, final_strength: float) -> str:
+        """Map confidence to qualitative zones using configured strength bands."""
+        try:
+            return get_signal_confidence_zone(float(final_strength))
+        except Exception:
+            if confidence >= 0.7:
+                return "strong"
+            if confidence >= 0.5:
+                return "weak"
+            return "neutral"
 
     async def run(self):
         self.running = True
@@ -239,14 +257,27 @@ class SignalEngine:
                     
                     # Debug: Log individual indicator results
                     if self.debug:
-                        print(f"DEBUG - Indicator Results for {sym}:")
+                        indicator_details = []
                         for indicator_name, indicator_result in res.items():
-                            direction = indicator_result.direction
-                            values = indicator_result.value
-                            vote = getattr(indicator_result, 'vote', 'N/A')
-                            strength = getattr(indicator_result, 'strength', 'N/A')
-                            label = getattr(indicator_result, 'label', 'N/A')
-                            print(f"  {indicator_name}: {direction} | Vote: {vote} | Strength: {strength} | Label: {label} | Values: {values}")
+                            values = {}
+                            if hasattr(indicator_result, "value") and isinstance(indicator_result.value, dict):
+                                values = {
+                                    key: (float(val) if isinstance(val, (int, float)) else safe_log_value(val))
+                                    for key, val in indicator_result.value.items()
+                                }
+                            indicator_details.append({
+                                "indicator": indicator_name,
+                                "direction": getattr(indicator_result, "direction", None),
+                                "vote": getattr(indicator_result, "vote", None),
+                                "strength": float(getattr(indicator_result, "strength", 0.0) or 0.0),
+                                "label": getattr(indicator_result, "label", None),
+                                "values": values,
+                            })
+                        self.logger.debug({
+                            "event": "debug_indicator_results",
+                            "symbol": sym,
+                            "details": indicator_details,
+                        })
                     
                     # ENHANCED WEIGHTED VOTING SYSTEM WITH DYNAMIC THRESHOLD
                     # Step 1: Calculate preliminary dynamic threshold for weighted voting decision mapping
@@ -356,17 +387,34 @@ class SignalEngine:
                         # Ultimate fallback: return neutral strength instead of None
                         if base_strength is None:
                             base_strength = 0.0
-                        print(
-                            f"Signal logs - Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
-                            f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, neutral:{neutral_cnt}}} | base_strength {base_strength} | "
-                            f"signal False | insert skipped | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
-                        )
-                        # Consolidated flow log when reason
-                        print(
-                            f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {base_strength} | "
-                            f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
-                            f"Decision: no_action | Reason: best_direction_missing"
-                        )
+                        self.logger.debug({
+                            "event": "signal_metrics",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "attempts": int(freq_attempts),
+                            "signals": int(freq_signals),
+                            "hit_rate_pct": float(round(freq_pct, 1)),
+                            "valid_indicators": int(valid_inds),
+                            "total_indicators": int(total_inds),
+                            "valid_pct": float(round(valid_pct, 1)),
+                            "dir_counts": {
+                                "buy": int(buy_cnt),
+                                "sell": int(sell_cnt),
+                                "neutral": int(neutral_cnt),
+                            },
+                            "signal_generated": False,
+                        })
+                        self.logger.debug({
+                            "event": "final_signal",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "decision": "none",
+                            "final_strength": float(base_strength),
+                            "threshold": None,
+                            "confidence": 0.0,
+                            "zone": "neutral",
+                            "blocked_reason": "best_direction_missing",
+                        })
                         continue
 
                     # Cache population moved earlier in the flow before weighted voting system
@@ -378,31 +426,55 @@ class SignalEngine:
                     
                     # Debug: Log multi-timeframe analysis
                     if self.debug:
-                        print(f"DEBUG - Multi-Timeframe Analysis for {sym}:")
-                        print(f"  M15 Signal: {m15_side}")
-                        print(f"  H1 Trend: {h1_dir} ({'Bullish' if h1_is_bull else 'Bearish'})")
-                        print(f"  H4 Trend: {h4_dir}")
-                        print(f"  H1 Alignment: {'PASS' if aligns_h1 else 'FAIL'}")
-                    
+                        self.logger.debug({
+                            "event": "debug_mtf_analysis",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "m15_direction": m15_side,
+                            "h1_trend": h1_dir,
+                            "h4_trend": h4_dir,
+                            "h1_alignment": bool(aligns_h1),
+                        })
+
                     if not aligns_h1:
-                        print(f"Ignored {sym} low-confidence M15 {m15_side.upper()} — H1 trend {h1_dir} misaligned.")
+                        self.logger.debug({
+                            "event": "alignment_gate",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "decision": "skipped",
+                            "reason": "h1_misaligned",
+                            "m15_direction": m15_side,
+                            "h1_trend": h1_dir,
+                        })
                         continue
 
                     # Volatility classification using H1 ATR vs 50-period avg
                     h1_atr_last = float(self.h1_cache_by_symbol[sym]["atr_last"])
                     h1_atr_mean50 = float(self.h1_cache_by_symbol[sym]["atr_mean50"])
                     extreme_vol = h1_atr_last > (3.0 * h1_atr_mean50)
-                    
+
                     # Debug: Log volatility analysis
                     if self.debug:
-                        print(f"DEBUG - Volatility Analysis for {sym}:")
-                        print(f"  H1 ATR Last: {h1_atr_last:.4f}")
-                        print(f"  H1 ATR Mean50: {h1_atr_mean50:.4f}")
-                        print(f"  ATR Ratio: {h1_atr_last/h1_atr_mean50:.2f}x")
-                        print(f"  Extreme Volatility: {'YES' if extreme_vol else 'NO'}")
-                    
+                        self.logger.debug({
+                            "event": "debug_volatility",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "h1_atr_last": float(h1_atr_last),
+                            "h1_atr_mean50": float(h1_atr_mean50),
+                            "atr_ratio": float(h1_atr_last / h1_atr_mean50) if h1_atr_mean50 else None,
+                            "extreme": bool(extreme_vol),
+                        })
+
                     if extreme_vol:
-                        print(f"Skipped {sym} trade due to extreme volatility (ATR > 3x mean).")
+                        self.logger.debug({
+                            "event": "volatility_gate",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "decision": "skipped",
+                            "reason": "atr_extreme",
+                            "h1_atr_last": float(h1_atr_last),
+                            "h1_atr_mean50": float(h1_atr_mean50),
+                        })
                         continue
 
                     h1_atr_last = float(self.h1_cache_by_symbol[sym]["atr_last"])
@@ -496,20 +568,16 @@ class SignalEngine:
                     final_strength = min(100.0, strength_with_alignment + atr_bonus + pa_bonus)
                     alignment_boost = final_strength - base_strength  # For logging compatibility
                     
-                    # Determine confidence zone
-                    confidence_zone = get_signal_confidence_zone(final_strength)
-                    
-                    # PATCH 2: Single confidence source of truth
-                    strong_count = vote_result.get("strong_signals", 0)
-                    def _calibrate_conf(strength, strong_count):
-                        # simple monotone calibration; keep deterministic
-                        # confidence in [0,1]
-                        s = max(0.0, min(1.0, strength/100.0))
-                        c = max(0.0, min(1.0, 0.6*s + 0.4*min(1.0, strong_count/4.0)))
-                        return c
+                    strong_count = int(vote_result.get("strong_signals", 0))
                     confidence = _calibrate_conf(final_strength, strong_count)
-                    vote_result["confidence"] = confidence
-                    # ensure no other confidence fields are logged; update logger calls accordingly
+                    confidence_zone = self._confidence_zone(confidence, final_strength)
+                    vote_result["confidence"] = float(confidence)
+                    self.logger.debug({
+                        "event": "confidence",
+                        "symbol": sym,
+                        "value": float(confidence),
+                        "zone": confidence_zone,
+                    })
                     
                     # Prepare market conditions for threshold calculation
                     market_conditions = {
@@ -530,10 +598,17 @@ class SignalEngine:
                     # Enhanced threshold logging for transparency
                     threshold_change = dynamic_threshold - self.threshold_manager.base_threshold
                     vote_adjustments = threshold_factors.get("vote_adjustments", {})
-                    print(f"Threshold Analysis - {sym}: Base {self.threshold_manager.base_threshold:.1f}% → Final {dynamic_threshold:.1f}% "
-                          f"(Δ{threshold_change:+.1f}%) | ATR: {atr_ratio:.2f}x | RSI dev: {rsi_deviation:.1f} | "
-                          f"Vote adj: {vote_adjustments.get('total_adjustment', 0.0):+.1f}% | "
-                          f"Market: {market_conditions.get('regime', 'unknown')}")
+                    self.logger.debug({
+                        "event": "threshold_analysis",
+                        "symbol": sym,
+                        "base": float(self.threshold_manager.base_threshold),
+                        "final": float(dynamic_threshold),
+                        "delta": float(threshold_change),
+                        "atr_ratio": float(atr_ratio) if atr_ratio is not None else None,
+                        "rsi_deviation": float(rsi_deviation) if rsi_deviation is not None else None,
+                        "vote_adj_total": float(vote_adjustments.get('total_adjustment', 0.0)),
+                        "market_regime": market_conditions.get('regime', 'unknown'),
+                    })
                     
                     # SANITY FILTER CHECK
                     # Get last candle data for sanity filtering
@@ -558,7 +633,19 @@ class SignalEngine:
                             'atr_ratio': h1_atr_last / h1_atr_mean50 if h1_atr_mean50 > 0 else 0
                         }
                     )
-                    
+
+                    sanity_payload = {
+                        key: (float(value) if isinstance(value, (int, float)) else value)
+                        for key, value in (validation_metadata or {}).items()
+                    }
+                    self.logger.debug({
+                        "event": "sanity_check",
+                        "symbol": sym,
+                        "passed": bool(sanity_passed),
+                        "reasons": filter_reason,
+                        **sanity_payload,
+                    })
+
                     # Two-tiered confidence filtering - initialize variables for all paths
                     directional_bias_threshold = 60.0  # 60% of total weighted bias
                     directional_bias_confidence = 0.0
@@ -568,18 +655,24 @@ class SignalEngine:
                     
                     # Debug logging
                     if DEBUG_SIGNALS:
-                        print(f"DEBUG - Signal Processing for {sym}:")
-                        print(f"  Base Strength: {base_strength:.2f}")
-                        print(f"  Alignment Multiplier: {alignment_multiplier:.2f}")
-                        print(f"  ATR Bonus: {atr_bonus:.2f} (volatility: {volatility_state})")
-                        print(f"  Price Action Bonus: {pa_bonus:.2f} (direction: {pa_dir})")
-                        print(f"  Final Strength: {final_strength:.2f}")
-                        print(f"  Confidence Zone: {confidence_zone}")
-                        print(f"  Confidence Filtering: {confidence_status}")
-                        print(f"  Contributions: {contrib_new}")
-                        print(f"  Strategy: {best.get('strategy', 'N/A')}")
-                        print(f"  Direction: {m15_side}")
-                        print("---")
+                        self.logger.debug({
+                            "event": "debug_signal_processing",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "base_strength": float(base_strength),
+                            "alignment_multiplier": float(alignment_multiplier),
+                            "atr_bonus": float(atr_bonus),
+                            "pa_bonus": float(pa_bonus),
+                            "final_strength": float(final_strength),
+                            "confidence_zone": confidence_zone,
+                            "confidence_status": confidence_status,
+                            "contributions": {
+                                key: (float(val) if isinstance(val, (int, float)) else val)
+                                for key, val in contrib_new.items()
+                            },
+                            "strategy": best.get('strategy', 'N/A'),
+                            "direction": m15_side,
+                        })
 
                 if best and best["direction"] in ("buy", "sell"):
                     # Tier 1: Directional Bias calculation
@@ -616,7 +709,16 @@ class SignalEngine:
                     tier2_passed = signal_strength_confidence >= dynamic_threshold  # Use dynamic threshold
                     sanity_passed_check = sanity_passed
                     mtf_confirmed = mtf_result.confirmed
-                    
+
+                    if m15_side in ("buy", "sell") and not mtf_confirmed:
+                        self.logger.debug({
+                            "event": "mtf_gate",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "ok": False,
+                        })
+                        vote_result["blocked_reason"] = "mtf_gate"
+
                     confidence_passed = tier1_passed and tier2_passed and sanity_passed_check and mtf_confirmed
                     
                     # Enhanced logging for confidence filtering
@@ -650,10 +752,18 @@ class SignalEngine:
                     
                     # Debug: Log decision reasoning
                     if self.debug:
-                        print(f"DEBUG - Decision Reasoning for {sym}:")
-                        print(f"  {decision_summary}")
+                        self.logger.debug({
+                            "event": "debug_decision_reasoning",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "summary": decision_summary,
+                            "reasons": decision_reasons,
+                        })
                     
-                    # Save only when both confidence tiers pass
+                    insert_status = "skipped"
+                    signal_generated = False
+                    decision_for_log = "none"
+
                     if confidence_passed:
                         record: Dict[str, Any] = {
                             "timestamp": ts,
@@ -701,68 +811,124 @@ class SignalEngine:
                         }
                         try:
                             insert_signal(record)
-                            # Track signal frequency
                             self.signal_counts_by_symbol[sym] = int(self.signal_counts_by_symbol.get(sym, 0)) + 1
                             insert_status = "ok"
-                            print(
-                                f"Signal logs - {sym} Signal: {m15_side.upper()} — Entry {entry_price:.2f}, SL {stop_loss_price:.2f}, TP {take_profit_price:.2f} | "
-                                f"Volatility {volatility_state}, RR {rr:.2f}, Final {final_strength:.1f}% | "
-                                f"H1 {h1_dir}, H4 {h4_dir} (boost {alignment_boost:+.0f}%) | "
-                                f"Adaptive threshold: {dynamic_threshold:.1f}% | Sanity: {filter_reason} | MTF: {mtf_result.reason} | "
-                                f"Contrib {contrib_new}"
-                            )
+                            signal_generated = True
+                            decision_for_log = m15_side
+                            self.logger.debug({
+                                "event": "signal_persist",
+                                "symbol": sym,
+                                "timeframe": primary_tf,
+                                "side": m15_side,
+                                "entry_price": float(entry_price),
+                                "stop_loss": float(stop_loss_price),
+                                "take_profit": float(take_profit_price),
+                                "risk_reward": float(rr),
+                                "volatility_state": volatility_state,
+                                "alignment_boost": float(alignment_boost),
+                                "dynamic_threshold": float(dynamic_threshold),
+                                "sanity_reason": filter_reason,
+                                "mtf_reason": mtf_result.reason,
+                                "contributions": {
+                                    key: (float(val) if isinstance(val, (int, float)) else val)
+                                    for key, val in contrib_new.items()
+                                },
+                            })
                         except Exception as e:
                             insert_status = f"error: {e}"
-                            print(f"Signal logs - Save failed for {sym}: {e}")
-
-                        # Always log metrics for this compute
-                        freq_attempts = int(self.attempt_counts_by_symbol.get(sym, 0))
-                        freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
-                        freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
-                        base_strength = (best["strength"] if best and "strength" in best else None)
-                        print(
-                            f"Signal logs - Metrics | {sym} {primary_tf} | ind_valid {valid_inds}/{total_inds} ({valid_pct}%) | "
-                            f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, neutral:{neutral_cnt}}} | base_strength {base_strength} | "
-                            f"signal True | insert {insert_status} | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
-                        )
-                        # Consolidated flow log when signal generated
-                        print(
-                            f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {final_strength} | "
-                            f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
-                            f"Decision: {m15_side} | Alignment H1:{h1_dir} H4:{h4_dir} boost {alignment_boost:+.0f}% | "
-                            f"Volatility {volatility_state} RR {rr:.2f} | Final Efficiency: {final_strength:.1f}% | Persist: {insert_status}"
-                        )
+                            self.logger.error({
+                                "event": "signal_persist_error",
+                                "symbol": sym,
+                                "timeframe": primary_tf,
+                                "error": str(e),
+                            })
                     else:
-                        # Log rejected signals with detailed reasoning
-                        print(
-                            f"Signal logs - REJECTED Signal for {sym}: {m15_side.upper()} | "
-                            f"Strength: {final_strength:.1f}% | Threshold: {dynamic_threshold:.1f}% | "
-                            f"Reason: {decision_summary}"
-                        )
-                        print(
-                            f"Signal logs - Rejection Details | {sym} {primary_tf} | "
-                            f"Tier1: {directional_bias_confidence:.1f}%/{directional_bias_threshold}% ({'PASS' if tier1_passed else 'FAIL'}), "
-                            f"Tier2: {signal_strength_confidence:.1f}%/{dynamic_threshold:.1f}% ({'PASS' if tier2_passed else 'FAIL'}), "
-                            f"Sanity: {'PASS' if sanity_passed_check else 'FAIL'} ({filter_reason}), "
-                            f"MTF: {'PASS' if mtf_confirmed else 'FAIL'} ({mtf_result.reason})"
-                        )
-                        # Additional threshold breakdown for rejected signals
-                        threshold_gap = dynamic_threshold - final_strength
-                        print(
-                            f"Signal logs - Block Analysis | {sym} | Gap: {threshold_gap:.1f}% | "
-                            f"Base threshold: {self.threshold_manager.base_threshold:.1f}% | "
-                            f"Threshold adjustment: {threshold_change:+.1f}% | "
-                            f"Market regime: {market_conditions.get('regime', 'unknown')} | "
-                            f"Volatility: {volatility_state} (ATR: {atr_ratio:.2f}x)"
-                        )
+                        if "blocked_reason" not in vote_result:
+                            vote_result["blocked_reason"] = "confidence_gate"
+                        threshold_gap = float(dynamic_threshold - final_strength)
+                        self.logger.debug({
+                            "event": "signal_rejected",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "direction": m15_side,
+                            "final_strength": float(final_strength),
+                            "threshold": float(dynamic_threshold),
+                            "decision_summary": decision_summary,
+                            "blocked_reason": vote_result.get("blocked_reason"),
+                        })
+                        self.logger.debug({
+                            "event": "rejection_details",
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "tier1_pct": float(directional_bias_confidence),
+                            "tier1_threshold": float(directional_bias_threshold),
+                            "tier1_passed": bool(tier1_passed),
+                            "tier2_pct": float(signal_strength_confidence),
+                            "tier2_threshold": float(dynamic_threshold),
+                            "tier2_passed": bool(tier2_passed),
+                            "sanity_passed": bool(sanity_passed_check),
+                            "sanity_reason": filter_reason,
+                            "mtf_confirmed": bool(mtf_confirmed),
+                            "mtf_reason": mtf_result.reason,
+                        })
+                        self.logger.debug({
+                            "event": "block_analysis",
+                            "symbol": sym,
+                            "threshold_gap": threshold_gap,
+                            "base_threshold": float(self.threshold_manager.base_threshold),
+                            "threshold_adjustment": float(threshold_change),
+                            "market_regime": market_conditions.get('regime', 'unknown'),
+                            "volatility_state": volatility_state,
+                            "atr_ratio": float(atr_ratio) if atr_ratio is not None else None,
+                        })
+
+                    freq_attempts = int(self.attempt_counts_by_symbol.get(sym, 0))
+                    freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
+                    freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
+                    base_strength_metric = float(best["strength"]) if best and "strength" in best and best["strength"] is not None else 0.0
+
+                    self.logger.debug({
+                        "event": "signal_metrics",
+                        "symbol": sym,
+                        "timeframe": primary_tf,
+                        "attempts": int(freq_attempts),
+                        "signals": int(freq_signals),
+                        "hit_rate_pct": float(round(freq_pct, 1)),
+                        "valid_indicators": int(valid_inds),
+                        "total_indicators": int(total_inds),
+                        "valid_pct": float(round(valid_pct, 1)),
+                        "dir_counts": {
+                            "buy": int(buy_cnt),
+                            "sell": int(sell_cnt),
+                            "neutral": int(neutral_cnt),
+                        },
+                        "signal_generated": bool(signal_generated),
+                        "insert_status": insert_status,
+                        "base_strength": base_strength_metric,
+                    })
+
+                    self.logger.debug({
+                        "event": "final_signal",
+                        "symbol": sym,
+                        "timeframe": primary_tf,
+                        "decision": decision_for_log,
+                        "final_strength": float(final_strength),
+                        "threshold": float(dynamic_threshold),
+                        "confidence": float(confidence),
+                        "zone": confidence_zone,
+                        "blocked_reason": vote_result.get("blocked_reason"),
+                    })
 
 
                 # Yield control briefly between symbols
                 await asyncio.sleep(0)
             except Exception as e:
                 err_type = type(e).__name__
-                print(f"Signal logs - Engine loop error [{err_type}]: {e}")
-                traceback.print_exc()
+                self.logger.exception({
+                    "event": "engine_loop_error",
+                    "error_type": err_type,
+                    "message": str(e),
+                })
                 await asyncio.sleep(5)
 
             # Respect configured run interval between iterations
@@ -832,10 +998,13 @@ class SignalEngine:
 
                 # Basic validation
                 if any(df is None or len(df) < 50 for df in (m15_df, h1_df, h4_df)):
-                    print(
-                        f"Signal logs - Signal Flow | {sym} {primary_tf} | gain N/A | "
-                        f"Fetch {fetch_report} | Result: insufficient_data"
-                    )
+                    self.logger.debug({
+                        "event": "compute_skip",
+                        "symbol": sym,
+                        "timeframe": primary_tf,
+                        "reason": "insufficient_data",
+                        "fetch": fetch_report,
+                    })
                     results.append({
                         "symbol": sym,
                         "status": "insufficient_data",
@@ -960,11 +1129,17 @@ class SignalEngine:
                     # Ultimate fallback: return neutral strength instead of None
                     if base_strength is None:
                         base_strength = 0.0
-                    print(
-                        f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {base_strength} | "
-                        f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
-                        f"Decision: no_action | Reason: best_direction_missing | Persist: skipped"
-                    )
+                    self.logger.debug({
+                        "event": "final_signal",
+                        "symbol": sym,
+                        "timeframe": primary_tf,
+                        "decision": "none",
+                        "final_strength": float(base_strength),
+                        "threshold": None,
+                        "confidence": 0.0,
+                        "zone": "neutral",
+                        "blocked_reason": "best_direction_missing",
+                    })
                     results.append({
                         "symbol": sym,
                         "timeframe": primary_tf,
@@ -1123,15 +1298,25 @@ class SignalEngine:
                     },
                     "fetch": fetch_report,
                 })
-                print(
-                    f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {final_strength} | "
-                    f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
-                    f"Decision: {'buy' if had_signal and confidence_passed else 'no_action'} | "
-                    f"Confidence: {confidence_status} | "
-                    f"Reasoning: {decision_summary} | "
-                    f"Alignment H1:{h1_dir} H4:{h4_dir} boost {alignment_boost:+.0f}% | Volatility {volatility_state} RR {rr:.2f} | "
-                    f"Final Efficiency: {final_strength:.1f}% | Persist: {insert_status}"
-                )
+                self.logger.debug({
+                    "event": "final_signal",
+                    "symbol": sym,
+                    "timeframe": primary_tf,
+                    "decision": "buy" if had_signal and confidence_passed else "none",
+                    "final_strength": float(final_strength),
+                    "threshold": None,
+                    "confidence": float(vote_result.get("confidence", 0.0)),
+                    "zone": self._confidence_zone(vote_result.get("confidence", 0.0), final_strength) if vote_result.get("confidence") is not None else "neutral",
+                    "blocked_reason": None if had_signal and confidence_passed else "confidence_gate",
+                    "details": {
+                        "confidence_status": confidence_status,
+                        "decision_summary": decision_summary,
+                        "alignment_boost": float(alignment_boost),
+                        "volatility_state": volatility_state,
+                        "risk_reward": float(rr),
+                        "insert_status": insert_status,
+                    },
+                })
         except Exception as e:
             results.append({"status": f"compute_once_error: {e}"})
         return results
