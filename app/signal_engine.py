@@ -47,7 +47,7 @@ from .db import insert_signal
 from .db import insert_indicator_snapshot
 from .db import get_active_strategy_config
 from .threshold_manager import ThresholdManagerFactory, ThresholdManager
-from .sanity_filter import SignalSanityFilterFactory, apply_sanity_overrides
+from .sanity_filter import SignalSanityFilterFactory, apply_sanity_overrides, sanity_check
 from .mtf_confirmation import MultiTimeframeConfirmation
 from .analytics.ab_regime import RegimeAB
 from .analytics.thompson import BetaBandit
@@ -665,40 +665,36 @@ class SignalEngine:
                     })
                     
                     # SANITY FILTER CHECK
-                    # Get last candle data for sanity filtering
                     last_candle = {
                         "open": float(m15_df.iloc[-1]["open"]),
                         "high": float(m15_df.iloc[-1]["high"]),
                         "low": float(m15_df.iloc[-1]["low"]),
                         "close": float(m15_df.iloc[-1]["close"])
                     }
-                    
-                    # Apply sanity filter with enhanced validation
-                    sanity_passed, filter_reason, validation_metadata = self.sanity_filter.validate_signal(
-                        candle=last_candle,
-                        atr=h1_atr_last,
-                        direction_confidence=final_strength,
-                        signal_strength=final_strength,
-                        symbol=sym,
-                        additional_data={
-                            'signal_direction': m15_side,
-                            'h1_alignment': aligns_h1,
-                            'volatility_regime': 'extreme' if extreme_vol else 'normal',
-                            'atr_ratio': h1_atr_last / h1_atr_mean50 if h1_atr_mean50 > 0 else 0
-                        }
+
+                    confidence_fraction = max(0.0, min(1.0, float(final_strength) / 100.0))
+                    sanity_passed, sanity_reasons, sanity_score = sanity_check(
+                        last_candle,
+                        float(h1_atr_last or 0.0),
+                        confidence_fraction,
+                        sym,
+                        self.logger,
                     )
 
-                    sanity_payload = {
-                        key: (float(value) if isinstance(value, (int, float)) else value)
-                        for key, value in (validation_metadata or {}).items()
-                    }
+                    reasons_text = ", ".join(sanity_reasons)
                     self.logger.debug({
                         "event": "sanity_check",
                         "symbol": sym,
                         "passed": bool(sanity_passed),
-                        "reasons": filter_reason,
-                        **sanity_payload,
+                        "score": round(sanity_score, 3),
+                        "reasons": reasons_text,
+                        "reason_codes": sanity_reasons,
                     })
+
+                    if not sanity_passed:
+                        self.logger.warning(
+                            f"Sanity Filter REJECTED for {sym}: {reasons_text or 'no_reasons'} [score={sanity_score:.2f}]"
+                        )
 
                     # Two-tiered confidence filtering - initialize variables for all paths
                     directional_bias_threshold = 60.0  # 60% of total weighted bias
@@ -779,7 +775,7 @@ class SignalEngine:
                     confidence_status = (
                         f"Tier1: {directional_bias_confidence:.1f}% ({'PASS' if tier1_passed else 'FAIL'}), "
                         f"Tier2: {signal_strength_confidence:.1f}% vs {dynamic_threshold:.1f}% ({'PASS' if tier2_passed else 'FAIL'}), "
-                        f"Sanity: {'PASS' if sanity_passed_check else 'FAIL'} ({filter_reason}), "
+                        f"Sanity: {'PASS' if sanity_passed_check else 'FAIL'} ({reasons_text or 'ok'}), "
                         f"MTF: {'PASS' if mtf_confirmed else 'FAIL'} (adj: {mtf_result.confidence_adjustment:.2f}x)"
                     )
                     
@@ -790,7 +786,7 @@ class SignalEngine:
                     if not tier2_passed:
                         decision_reasons.append(f"Signal strength insufficient ({signal_strength_confidence:.1f}% < {dynamic_threshold:.1f}%)")
                     if not sanity_passed_check:
-                        decision_reasons.append(f"Sanity filter failed ({filter_reason})")
+                        decision_reasons.append(f"Sanity filter failed ({reasons_text or 'no details'})")
                     if not mtf_confirmed:
                         decision_reasons.append(f"MTF confirmation failed ({mtf_result.reason})")
                     if aligns_h1:
@@ -852,7 +848,7 @@ class SignalEngine:
                             # Adaptive threshold and filter metadata
                             "dynamic_threshold": dynamic_threshold,
                             "threshold_factors": threshold_factors,
-                            "filter_reason": filter_reason,
+                            "filter_reason": reasons_text,
                             "sanity_check_passed": sanity_passed,
                             "mtf_confirmation": {
                                 "confirmed": mtf_result.confirmed,
@@ -881,7 +877,7 @@ class SignalEngine:
                                 "volatility_state": volatility_state,
                                 "alignment_boost": float(alignment_boost),
                                 "dynamic_threshold": float(dynamic_threshold),
-                                "sanity_reason": filter_reason,
+                                "sanity_reason": reasons_text,
                                 "mtf_reason": mtf_result.reason,
                                 "contributions": {
                                     key: (float(val) if isinstance(val, (int, float)) else val)
@@ -921,7 +917,7 @@ class SignalEngine:
                             "tier2_threshold": float(dynamic_threshold),
                             "tier2_passed": bool(tier2_passed),
                             "sanity_passed": bool(sanity_passed_check),
-                            "sanity_reason": filter_reason,
+                            "sanity_reason": reasons_text,
                             "mtf_confirmed": bool(mtf_confirmed),
                             "mtf_reason": mtf_result.reason,
                         })
@@ -1224,34 +1220,32 @@ class SignalEngine:
                 if mtf_floor_override is not None:
                     self.mtf_confirmation.set_confirmation_floor(mtf_floor_override)
                 try:
-                    sanity_passed, filter_reason, validation_metadata = self.sanity_filter.validate_signal(
-                        candle=last_candle,
-                        atr=float(h1_atr_last),
-                        direction_confidence=final_strength,
-                        signal_strength=final_strength,
-                        symbol=sym,
-                        additional_data={
-                            "signal_direction": m15_side,
-                            "h1_alignment": aligns_h1,
-                            "volatility_regime": "normal",
-                            "atr_ratio": atr_ratio,
-                        },
+                    confidence_fraction = max(0.0, min(1.0, float(final_strength) / 100.0))
+                    sanity_passed, sanity_reasons, sanity_score = sanity_check(
+                        last_candle,
+                        float(h1_atr_last or 0.0),
+                        confidence_fraction,
+                        sym,
+                        self.logger,
                     )
                 finally:
                     if mtf_floor_override is not None:
                         self.mtf_confirmation.set_confirmation_floor(original_floor)
 
-            sanity_payload = {
-                key: (float(value) if isinstance(value, (int, float)) else value)
-                for key, value in (validation_metadata or {}).items()
-            }
+            reasons_text = ", ".join(sanity_reasons)
             self.logger.debug({
                 "event": "sanity_check",
                 "symbol": sym,
                 "passed": bool(sanity_passed),
-                "reasons": filter_reason,
-                **sanity_payload,
+                "score": round(sanity_score, 3),
+                "reasons": reasons_text,
+                "reason_codes": sanity_reasons,
             })
+
+            if not sanity_passed:
+                self.logger.warning(
+                    f"Sanity Filter REJECTED for {sym}: {reasons_text or 'no_reasons'} [score={sanity_score:.2f}]"
+                )
 
             self.logger.debug({
                 "event": "confidence",
