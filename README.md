@@ -29,6 +29,12 @@ POSTGRES_PASSWORD=<password>
 CORS_ALLOW_ORIGINS=http://localhost:3000
 ```
 
+### Configuration
+
+| Env var        | Values             | Description                     |
+|----------------|--------------------|---------------------------------|
+| `VEDI_LOG_LEVEL` | `off` / `info` / `debug` | Controls runtime log verbosity. |
+
 ## Install
 ```
 python -m venv .venv
@@ -70,13 +76,19 @@ Base URL: `http://localhost:8001`
 - `POST /api/config/strategies/{id}/activate` — activate a trading strategy.
 
 ### Backtesting
-- `POST /api/backtest/manual/generate` — generate historical signals.
-- `GET /api/backtest/manual/runs` — list backtesting runs.
-- `GET /api/backtest/manual/signals/{run_id}` — get signals for specific run.
+- `POST /api/backtest/run` — run unified backtest with strategy.
+- `GET /api/backtest/roi` — calculate ROI for backtest results.
+- `GET /api/backtest/{backtest_id}/results` — get detailed backtest results.
+- `GET /api/backtest/list` — list all backtests.
 
 ### Documentation
 - `GET /openapi.json` — live OpenAPI spec.
 - `GET /docs` — Swagger UI.
+
+## Additional Documentation
+
+### Signal Processing
+- **[Weighted Voting System](docs/Weighted_Voting_System.md)** — Comprehensive guide to the weighted voting decision aggregation system for technical indicators
 
 ## Export Swagger for Frontend
 Generate a static OpenAPI JSON file to `docs/openapi.json`:

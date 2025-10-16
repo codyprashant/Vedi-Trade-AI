@@ -6,3 +6,4 @@ pandas>=2.2.2
 pandas-ta>=0.3.14b
 psycopg2-binary>=2.9.9
 yfinance>=0.2.40
+schedule>=1.2.0

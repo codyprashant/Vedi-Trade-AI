@@ -2,7 +2,7 @@
 
 ## Overview
 
-VediTrading AI is a sophisticated FastAPI-based trading analytics and signal generation engine designed for multi-asset trading across Forex, Commodities, and Indices. The system analyzes multi-timeframe price data, computes a comprehensive suite of technical indicators with multiple periods, and produces validated trade signals through advanced strategy algorithms. It provides enhanced real-time WebSocket streaming with integrated signal data, manual backtesting capabilities, and a trade execution simulator for performance evaluation.
+VediTrading AI is a sophisticated FastAPI-based trading analytics and signal generation engine designed for multi-asset trading across Forex, Commodities, and Indices. The system analyzes multi-timeframe price data, computes a comprehensive suite of technical indicators with multiple periods, and produces validated trade signals through advanced strategy algorithms. It provides enhanced real-time WebSocket streaming with integrated signal data, unified backtesting capabilities, and a trade execution simulator for performance evaluation.
 
 The system exposes REST endpoints for health monitoring, historical data retrieval, signal management, strategy configuration, and backtesting, plus an enhanced WebSocket feed for live tick streaming with detailed indicator data, signal evaluations, and trading signals. All signals and backtesting artifacts are persisted in PostgreSQL for comprehensive analytics and historical tracking.
 
@@ -24,6 +24,14 @@ The system exposes REST endpoints for health monitoring, historical data retriev
 - **Streamlined Response**: Removed unnecessary market state fields for cleaner data
 - **Strategy Configuration**: Dynamic strategy management with real-time parameter updates
 
+#### Phase 3: Enhanced Signal System (Latest)
+- **Weighted Bias Logic**: Intelligent bias calculation using weighted indicator contributions for more accurate signal direction
+- **Dynamic Confidence Thresholds**: Adaptive confidence zones (Strong: 75%+, Weak: 50-75%, Neutral: <50%) with enhanced filtering
+- **Direction Confidence Tracking**: New database fields `direction_confidence` and `direction_reason` for signal transparency
+- **Enhanced Error Handling**: Comprehensive scope management and variable initialization for robust signal processing
+- **Improved Signal Quality**: Enhanced confidence filtering reduces false signals while maintaining high-quality signal generation
+- **Database Compatibility**: Full backward compatibility with existing signal storage and backtesting systems
+
 ## Key Features
 
 - **Multi-Timeframe Analysis**: Signal generation on `M15` timeframe, validated against `H1` trend with additive `H1`/`H4` alignment boosts for enhanced confidence
@@ -31,7 +39,7 @@ The system exposes REST endpoints for health monitoring, historical data retriev
 - **Intelligent Strategy Engine**: Combines trend and momentum contributions with configurable weights, thresholds, and multi-strategy support
 - **Volatility-Aware Trading**: Entry, stop-loss, and take-profit distances dynamically adapt to ATR and volatility classification
 - **Real-Time Data Streaming**: Live WebSocket tick streaming and REST history retrieval with comprehensive indicator data
-- **Comprehensive Backtesting**: Manual backtesting over historical periods with batch signal generation and 2-day M1 execution simulator
+- **Comprehensive Backtesting**: Unified BacktestEngine with strategy-based backtesting, ROI calculation, and detailed performance metrics
 - **Robust Persistence**: PostgreSQL storage for signals, backtesting runs, and indicator snapshots
 - **Dynamic Configuration**: Real-time strategy parameter adjustment without server restarts
 - **Multi-Asset Support**: Configurable for Forex, Commodities, and Indices
@@ -171,6 +179,57 @@ ATR_STABILITY_BONUS = 5     # Bonus for stable volatility environments
 PRICE_ACTION_BONUS = 8      # Bonus for strong price action patterns
 ```
 
+### Enhanced Signal System Configuration
+
+#### Weighted Bias Logic
+The enhanced signal system uses intelligent weighted bias calculation for more accurate signal direction:
+
+```python
+# Weighted Bias Calculation
+BIAS_WEIGHTS = {
+    "RSI": 0.25,           # RSI contribution to bias direction
+    "MACD": 0.30,          # MACD signal line contribution  
+    "SMA_EMA": 0.20,       # Moving average trend contribution
+    "BBANDS": 0.15,        # Bollinger Band position weight
+    "STOCH": 0.10          # Stochastic momentum contribution
+}
+
+# Direction Confidence Thresholds
+CONFIDENCE_THRESHOLDS = {
+    "STRONG": 0.75,        # 75%+ confidence for strong signals
+    "WEAK": 0.50,          # 50-75% confidence for weak signals  
+    "NEUTRAL": 0.00        # <50% confidence classified as neutral
+}
+```
+
+#### Enhanced Filtering Parameters
+```python
+# Signal Quality Filters
+MIN_CONFIDENCE_FOR_SIGNAL = 0.50      # Minimum 50% confidence required
+ENHANCED_FILTERING_ENABLED = True      # Enable enhanced confidence filtering
+NEUTRAL_SIGNAL_THRESHOLD = 0.25        # Target: <25% neutral signals
+
+# Database Fields for Enhanced Tracking
+ENHANCED_FIELDS = {
+    "direction_confidence": "DECIMAL(5,4)",  # Confidence percentage (0.0000-1.0000)
+    "direction_reason": "TEXT"               # Human-readable confidence explanation
+}
+```
+
+#### Error Handling & Scope Management
+```python
+# Enhanced Error Handling Configuration
+SCOPE_MANAGEMENT = {
+    "initialize_variables": True,       # Initialize all variables at function start
+    "comprehensive_logging": True,      # Enable detailed debug logging
+    "fallback_values": {               # Default values for error scenarios
+        "confidence": 0.0,
+        "direction": "NEUTRAL", 
+        "risk_reward": 1.5
+    }
+}
+```
+
 ## Detailed Signal Generation Logic
 
 ### Step-by-Step Signal Generation Process
@@ -215,7 +274,73 @@ ema_21 = ta.ema(close, length=21)   # Medium trend
 ema_55 = ta.ema(close, length=55)   # Slow trend
 ```
 
-#### Phase 3: Signal Evaluation
+#### Phase 3: Enhanced Signal Evaluation
+
+The enhanced signal system introduces weighted bias logic and confidence-based filtering:
+
+**Enhanced Bias Calculation**:
+```python
+def calculate_weighted_bias(indicators):
+    """Calculate weighted bias using multiple indicator contributions"""
+    bias_score = 0.0
+    total_weight = 0.0
+    
+    # RSI contribution (25% weight)
+    if indicators.get('rsi_signal') == 'BUY':
+        bias_score += 0.25
+    elif indicators.get('rsi_signal') == 'SELL':
+        bias_score -= 0.25
+    total_weight += 0.25
+    
+    # MACD contribution (30% weight)  
+    if indicators.get('macd_signal') == 'BUY':
+        bias_score += 0.30
+    elif indicators.get('macd_signal') == 'SELL':
+        bias_score -= 0.30
+    total_weight += 0.30
+    
+    # Additional indicator contributions...
+    
+    # Calculate final bias direction and confidence
+    if total_weight > 0:
+        normalized_bias = bias_score / total_weight
+        confidence = abs(normalized_bias)
+        direction = 'BUY' if normalized_bias > 0 else 'SELL'
+    else:
+        confidence = 0.0
+        direction = 'NEUTRAL'
+    
+    return direction, confidence
+```
+
+**Confidence-Based Signal Filtering**:
+```python
+def enhanced_signal_filter(direction, confidence, signal_strength):
+    """Enhanced filtering based on confidence thresholds"""
+    
+    # Confidence classification
+    if confidence >= 0.75:
+        confidence_status = "Strong"
+    elif confidence >= 0.50:
+        confidence_status = "Weak"  
+    else:
+        confidence_status = "Neutral"
+        
+    # Enhanced filtering logic
+    if confidence < 0.50:  # Below minimum confidence threshold
+        return None, "Confidence too low for signal generation"
+        
+    # Additional signal strength validation
+    if signal_strength < 60:  # Below minimum signal strength
+        return None, "Signal strength insufficient"
+        
+    return {
+        'direction': direction,
+        'confidence': confidence,
+        'confidence_status': confidence_status,
+        'signal_strength': signal_strength
+    }, "Signal passed enhanced filtering"
+```
 
 **RSI Signal Logic**:
 ```python
@@ -494,25 +619,59 @@ def evaluate_enhanced_macd(macd_line, macd_signal, macd_histogram, histogram_thr
         return "neutral"
 ```
 
-#### Phase 6: Volatility Classification
+#### Phase 6: Enhanced Volatility Classification
 
-**ATR-Based Volatility Analysis**:
+**ATR-Based Volatility Analysis with Metadata**:
 ```python
-def classify_volatility(h1_data, atr_length=14):
-    atr = ta.atr(h1_data['high'], h1_data['low'], h1_data['close'], length=atr_length)
-    current_atr = atr.iloc[-1]
-    atr_mean_50 = atr.rolling(50).mean().iloc[-1]
+def classify_volatility_regime(self, atr_ratio: float) -> Tuple[str, Dict[str, Any]]:
+    """
+    Classify market volatility regime based on ATR ratio.
     
-    atr_ratio = current_atr / atr_mean_50
+    Returns:
+        Tuple of (regime_string, metadata_dict)
+    """
+    # Enhanced regime classification with normal_low and normal_high
+    if atr_ratio < self.volatility_regimes['low']:  # < 0.7
+        regime = 'low'
+        description = 'Low volatility - Below average market movement'
+        adjustment_factor = 0.8
+    elif atr_ratio < self.volatility_regimes['normal_low']:  # 0.7 - 1.0
+        regime = 'normal_low'
+        description = 'Normal-Low volatility - Slightly below average'
+        adjustment_factor = 0.9
+    elif atr_ratio < self.volatility_regimes['normal_high']:  # 1.0 - 1.5
+        regime = 'normal_high'
+        description = 'Normal-High volatility - Slightly above average'
+        adjustment_factor = 1.0
+    elif atr_ratio < self.volatility_regimes['high']:  # 1.5 - 2.0
+        regime = 'high'
+        description = 'High volatility - Above average market movement'
+        adjustment_factor = 1.2
+    else:  # >= 2.0
+        regime = 'extreme'
+        description = 'Extreme volatility - Significantly elevated movement'
+        adjustment_factor = 1.5
     
-    if atr_ratio > 3.0:
-        return "Extreme"  # Skip signal generation
-    elif atr_ratio > 1.2:
-        return "High"     # Increased SL distance
-    elif atr_ratio < 0.8:
-        return "Low"      # Reduced SL distance  
-    else:
-        return "Normal"   # Standard SL distance
+    metadata = {
+        'regime': regime,
+        'atr_ratio': atr_ratio,
+        'description': description,
+        'adjustment_factor': adjustment_factor,
+        'thresholds': self.volatility_regimes
+    }
+    
+    return regime, metadata
+```
+
+**Configuration**:
+```python
+"volatility_regime_thresholds": {
+    "low": 0.7,         # ATR ratio < 0.7 = low volatility
+    "normal_low": 1.0,  # 0.7 <= ATR ratio < 1.0 = normal-low volatility
+    "normal_high": 1.5, # 1.0 <= ATR ratio < 1.5 = normal-high volatility
+    "high": 2.0,        # 1.5 <= ATR ratio < 2.0 = high volatility
+    # ATR ratio >= 2.0 = extreme volatility
+}
 ```
 
 #### Phase 7: Trade Plan Computation
@@ -999,6 +1158,251 @@ python test/test_websocket.py
 # Export current configuration
 python scripts/export_openapi.py
 ```
+
+## Daily Signal Evaluation & ROI Tracker
+
+### Overview
+
+The Daily Signal Evaluation & ROI Tracker is an automated system that evaluates the performance of all trading signals generated by the VediTrading AI system. It runs daily at 05:00 AM server time to analyze the previous day's signals, determine their outcomes (profit/loss/still-open), and maintain comprehensive performance statistics.
+
+### Key Features
+
+- **Automated Daily Evaluation**: Runs at 05:00 AM daily to evaluate previous day's signals
+- **Historical Outcome Analysis**: Determines signal results based on actual OHLC price data
+- **Performance Metrics**: Tracks ROI, success rates, and efficiency scores per symbol/strategy/timeframe
+- **Open Signal Monitoring**: Continuously re-evaluates open positions until they close
+- **Backfill Capability**: Historical evaluation for any date range
+- **Comprehensive Database**: Stores detailed results and performance summaries
+
+### Schedule & Operation
+
+**Daily Schedule**: 05:00 AM server time
+**Evaluation Process**:
+1. Fetch all signals from the previous trading day
+2. Retrieve historical OHLC data for each signal's symbol
+3. Simulate trade execution using entry, stop-loss, and take-profit levels
+4. Determine outcome: profit (TP hit), loss (SL hit), or still open
+5. Calculate percentage return and update database
+6. Re-evaluate any previously open signals
+7. Update performance summaries and daily statistics
+
+### Signal Outcome Classification
+
+#### Profit Signals
+- **Buy Signal**: Price reaches or exceeds take-profit level
+- **Sell Signal**: Price drops to or below take-profit level
+- **Exit Price**: Actual take-profit price
+- **Result**: Positive percentage return
+
+#### Loss Signals
+- **Buy Signal**: Price drops to or below stop-loss level
+- **Sell Signal**: Price rises to or above stop-loss level
+- **Exit Price**: Actual stop-loss price
+- **Result**: Negative percentage return
+
+#### Open Signals
+- **Condition**: Neither take-profit nor stop-loss has been hit
+- **Exit Price**: Current market price (last close)
+- **Result**: Unrealized gain/loss percentage
+- **Re-evaluation**: Checked daily until position closes
+
+### Performance Metrics
+
+#### Individual Signal Metrics
+```python
+profit_pct = ((exit_price - entry_price) / entry_price * 100) * direction_multiplier
+direction_multiplier = 1 for buy signals, -1 for sell signals
+```
+
+#### Aggregate Performance Metrics
+- **Total Signals**: Count of all evaluated signals
+- **Win Count**: Number of profitable signals
+- **Loss Count**: Number of losing signals
+- **Open Count**: Number of still-open signals
+- **Win Rate**: `(win_count / (win_count + loss_count)) * 100`
+- **Average Profit %**: Mean percentage return across all signals
+- **Total ROI %**: Cumulative percentage return
+- **Efficiency Score**: Win rate percentage
+
+### Database Schema
+
+#### signal_results Table
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| signal_id | UUID | Foreign key to signals table |
+| result | TEXT | "profit", "loss", or "open" |
+| exit_price | DECIMAL(10,5) | Actual exit price |
+| profit_pct | DECIMAL(8,4) | Percentage return |
+| evaluated_at | TIMESTAMP | Evaluation timestamp |
+| evaluation_notes | TEXT | Optional comments |
+
+#### signal_performance_summary Table
+| Column | Type | Description |
+|--------|------|-------------|
+| symbol | TEXT | Trading symbol |
+| timeframe | TEXT | Signal timeframe |
+| strategy | TEXT | Strategy name |
+| total_signals | INTEGER | Total signal count |
+| win_count | INTEGER | Profitable signals |
+| loss_count | INTEGER | Losing signals |
+| open_count | INTEGER | Open signals |
+| avg_profit_pct | DECIMAL(8,4) | Average return % |
+| total_roi_pct | DECIMAL(10,4) | Cumulative ROI % |
+| efficiency_pct | DECIMAL(5,2) | Win rate percentage |
+| last_updated | TIMESTAMP | Last update time |
+
+#### signal_performance_daily Table
+| Column | Type | Description |
+|--------|------|-------------|
+| evaluation_date | DATE | Evaluation date |
+| symbol | TEXT | Trading symbol |
+| signals_evaluated | INTEGER | Signals processed |
+| new_profits | INTEGER | New profitable closures |
+| new_losses | INTEGER | New losing closures |
+| daily_roi_pct | DECIMAL(8,4) | Daily ROI contribution |
+| created_at | TIMESTAMP | Record creation time |
+
+### Management Commands
+
+#### Daily Evaluation
+```bash
+# Run evaluation for yesterday (default)
+python manage.py evaluate_signals
+
+# Run evaluation for specific date
+python manage.py evaluate_signals --date 2024-12-15
+
+# Backfill historical evaluation
+python manage.py evaluate_signals --from 2024-01-01 --to 2024-12-31
+```
+
+#### Open Signal Re-evaluation
+```bash
+# Re-evaluate all open signals
+python manage.py reevaluate_open
+```
+
+#### Performance Statistics
+```bash
+# Show overall performance
+python manage.py show_performance
+
+# Filter by symbol
+python manage.py show_performance --symbol XAUUSD
+
+# Filter by timeframe
+python manage.py show_performance --timeframe 15m
+```
+
+#### Database Initialization
+```bash
+# Initialize evaluation tables
+python manage.py init_db
+```
+
+### Sample Performance Output
+
+| Symbol | Direction | Entry | Exit | Result | P/L% | Status |
+|--------|-----------|-------|------|--------|------|--------|
+| XAUUSD | Buy | 2285.3 | 2298.2 | Profit | +0.57 | Closed |
+| XAUUSD | Sell | 2290.5 | 2283.1 | Profit | +0.32 | Closed |
+| EURUSD | Buy | 1.0850 | 1.0835 | Loss | -0.14 | Closed |
+| GBPUSD | Sell | 1.2650 | - | Open | +0.08 | Open |
+
+### Scheduler Configuration
+
+#### Automated Scheduling
+```python
+# Daily signal evaluation at 5:00 AM
+schedule.every().day.at("05:00").do(daily_signal_evaluation_job)
+
+# Weekly cleanup on Sunday at 2:00 AM
+schedule.every().sunday.at("02:00").do(weekly_cleanup_job)
+```
+
+#### Manual Scheduler Control
+```bash
+# Start scheduler daemon
+python jobs/scheduler.py --mode start
+
+# Run specific job once
+python jobs/scheduler.py --mode run-once --job daily_evaluation
+
+# Check scheduler status
+python jobs/scheduler.py --mode status
+```
+
+### API Integration
+
+#### Evaluation Endpoints
+```
+POST /api/evaluation/run-daily          # Trigger daily evaluation
+POST /api/evaluation/reevaluate-open    # Re-evaluate open signals
+GET  /api/evaluation/performance        # Get performance summary
+GET  /api/evaluation/results/{signal_id} # Get specific signal result
+```
+
+#### Performance Query Examples
+```bash
+# Get overall performance
+curl http://localhost:8001/api/evaluation/performance
+
+# Get performance for specific symbol
+curl http://localhost:8001/api/evaluation/performance?symbol=XAUUSD
+
+# Get daily performance history
+curl http://localhost:8001/api/evaluation/daily?from=2024-01-01&to=2024-12-31
+```
+
+### Testing & Validation
+
+#### Test Coverage
+- **test_signal_profit_hit_takeprofit()**: Validates profit detection when TP is hit
+- **test_signal_loss_hit_stoploss()**: Validates loss detection when SL is hit
+- **test_signal_still_open()**: Validates open signal handling
+- **test_daily_summary_efficiency_calculation()**: Validates performance metrics
+- **test_backfill_command()**: Validates historical evaluation
+
+#### Running Tests
+```bash
+# Run evaluation system tests
+python test/test_signal_performance_evaluator.py
+
+# Run all tests including evaluation
+python test/run_all_tests.py
+```
+
+### Monitoring & Alerts
+
+#### Key Metrics to Monitor
+- Daily evaluation completion status
+- Number of signals evaluated per day
+- Performance trend analysis
+- Open signal count and duration
+- Database performance and storage
+
+#### Log Files
+- **scheduler.log**: Scheduler operation logs
+- **evaluation.log**: Signal evaluation details
+- **performance.log**: Performance calculation logs
+
+### Benefits & Use Cases
+
+#### For Traders
+- **Performance Tracking**: Real-time ROI and efficiency monitoring
+- **Strategy Validation**: Historical performance analysis
+- **Risk Management**: Open position monitoring and alerts
+
+#### For System Administrators
+- **Automated Monitoring**: Daily performance validation
+- **Historical Analysis**: Backfill capability for any date range
+- **Database Optimization**: Automated cleanup and maintenance
+
+#### For Developers
+- **API Integration**: RESTful endpoints for external systems
+- **Extensible Design**: Easy addition of new metrics and evaluations
+- **Comprehensive Testing**: Full test coverage for reliability
 
 ## Summary
 

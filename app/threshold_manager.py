@@ -1,0 +1,686 @@
+"""
+Dynamic Adaptive Threshold Manager
+
+This module provides intelligent threshold adjustment based on market conditions,
+volatility, momentum, and price deviation from key moving averages.
+"""
+
+import logging
+from typing import Dict, Any, Tuple
+import numpy as np
+
+from .analytics.auto_threshold import AutoThresholdCalibrator
+from . import config
+
+logger = logging.getLogger(__name__)
+
+class ThresholdManager:
+    """
+    Computes adaptive thresholds per timeframe and symbol based on:
+    - Volatility (ATR ratio)
+    - Momentum spread (RSI deviation from 50, MACD histogram magnitude)
+    - Price deviation from key MAs (EMA55, SMA200)
+    """
+    
+    def __init__(self, 
+                 base_threshold: float = 60.0,
+                 atr_factor: float = 0.002,
+                 min_threshold: float = 45.0,
+                 max_threshold: float = 75.0,
+                 volatility_weight: float = 1.0,
+                 momentum_weight: float = 1.0,
+                 trend_weight: float = 0.8,
+                 volatility_regime_thresholds: Dict[str, float] = None,
+                 stress_detection_enabled: bool = True,
+                 adaptive_parameters: bool = True):
+        """
+        Initialize ThresholdManager with configurable parameters.
+        
+        Args:
+            base_threshold: Base signal strength threshold (default: 60%)
+            atr_factor: ATR sensitivity factor for volatility adjustment
+            min_threshold: Minimum allowed threshold (prevents over-tightening)
+            max_threshold: Maximum allowed threshold (prevents over-loosening)
+            volatility_weight: Weight for volatility-based adjustments
+            momentum_weight: Weight for momentum-based adjustments
+            trend_weight: Weight for trend-based adjustments
+            volatility_regime_thresholds: Custom thresholds for volatility regimes
+            stress_detection_enabled: Enable market stress detection
+            adaptive_parameters: Enable dynamic parameter adjustment
+        """
+        self.base_threshold = base_threshold
+        self.atr_factor = atr_factor
+        self.min_threshold = min_threshold
+        self.max_threshold = max_threshold
+        self.volatility_weight = volatility_weight
+        self.momentum_weight = momentum_weight
+        self.trend_weight = trend_weight
+        self.stress_detection_enabled = stress_detection_enabled
+        self.adaptive_parameters = adaptive_parameters
+        
+        # Enhanced volatility regime thresholds
+        self.volatility_regimes = volatility_regime_thresholds or {
+            'low': 0.7,      # ATR ratio < 0.7 = Low volatility
+            'normal_low': 1.0,   # 0.7 <= ATR ratio < 1.0 = Normal-Low
+            'normal_high': 1.5,  # 1.0 <= ATR ratio < 1.5 = Normal-High
+            'high': 2.0,     # 1.5 <= ATR ratio < 2.0 = High volatility
+            'extreme': 3.0   # ATR ratio >= 2.0 = Extreme volatility
+        }
+        
+        logger.info(f"ThresholdManager initialized: base={base_threshold}, "
+                   f"atr_factor={atr_factor}, range=[{min_threshold}, {max_threshold}], "
+                   f"stress_detection={stress_detection_enabled}, adaptive={adaptive_parameters}")
+
+        self._auto = None
+        if config.AUTO_THRESHOLD_ENABLED:
+            self._auto = AutoThresholdCalibrator(
+                path="data/auto_threshold.json",
+                alpha=config.THRESH_EWMA_ALPHA,
+                base=self.base_threshold,
+                thr_min=config.THRESH_MIN,
+                thr_max=config.THRESH_MAX,
+            )
+    
+    def classify_volatility_regime(self, atr_ratio: float) -> Tuple[str, Dict[str, Any]]:
+        """
+        Classify current volatility regime based on ATR ratio.
+        
+        Args:
+            atr_ratio: Current ATR ratio (current ATR / historical average)
+            
+        Returns:
+            Tuple of (regime_name, regime_metadata)
+        """
+        if atr_ratio < self.volatility_regimes['low']:
+            regime = 'low'
+            description = 'Low volatility - Markets are calm, tighten thresholds'
+            adjustment_factor = 1.2  # Increase adjustments in low vol
+        elif atr_ratio < self.volatility_regimes['normal_low']:
+            regime = 'normal_low'
+            description = 'Normal-Low volatility - Slightly below average'
+            adjustment_factor = 1.0
+        elif atr_ratio < self.volatility_regimes['normal_high']:
+            regime = 'normal_high'
+            description = 'Normal-High volatility - Slightly above average'
+            adjustment_factor = 1.0
+        elif atr_ratio < self.volatility_regimes['high']:
+            regime = 'high'
+            description = 'High volatility - Markets are active, loosen thresholds'
+            adjustment_factor = 0.8  # Reduce adjustments in high vol
+        else:
+            regime = 'extreme'
+            description = 'Extreme volatility - Markets are stressed, significantly loosen thresholds'
+            adjustment_factor = 0.6  # Further reduce adjustments in extreme vol
+        
+        metadata = {
+            'regime': regime,
+            'atr_ratio': atr_ratio,
+            'description': description,
+            'adjustment_factor': adjustment_factor,
+            'thresholds': self.volatility_regimes
+        }
+        
+        return regime, metadata
+    
+    def detect_market_stress(self, market_conditions: dict) -> dict:
+        """
+        Detect market stress conditions using multiple indicators and return a dict.
+        
+        Args:
+            market_conditions: Dict containing market data
+            
+        Returns:
+            {
+              'is_stressed': bool,
+              'stress_level': 'none'|'low'|'medium'|'high'|'extreme',
+              'stress_score': float,
+              'indicators': { ... booleans for each stress trigger ... },
+              'threshold_recommendation': 'none'|'increase'|'decrease',
+              'recommended_adjustment': float,  # percentage points (+tighten, -loosen)
+              'details': { 'atr_ratio': float, 'rsi': float, 'macd_histogram': float, 'price_ma_deviation': float }
+            }
+        """
+        if not self.stress_detection_enabled:
+            return {
+                'is_stressed': False,
+                'stress_level': 'none',
+                'stress_score': 0.0,
+                'indicators': {},
+                'threshold_recommendation': 'none',
+                'recommended_adjustment': 0.0,
+                'details': {'stress_detection_disabled': True}
+            }
+        
+        atr_ratio = float(market_conditions.get('atr_ratio', 0.0))
+        rsi = float(market_conditions.get('rsi', 50.0))
+        macd_hist = float(market_conditions.get('macd_histogram', 0.0))
+        price_dev = abs(float(market_conditions.get('price_ma_deviation', 0.0)))  # percent (0.05 = 5%)
+        
+        stress_indicators = {}
+        stress_score = 0.0
+        
+        # ATR stress
+        if atr_ratio >= 2.0:
+            stress_indicators['atr_extreme'] = True
+            stress_score += 2.0
+        elif atr_ratio >= 1.5:
+            stress_indicators['atr_high'] = True
+            stress_score += 1.0
+        
+        # RSI extremes
+        if rsi >= 80 or rsi <= 20:
+            stress_indicators['rsi_extreme'] = True
+            stress_score += 1.0
+        elif rsi >= 70 or rsi <= 30:
+            stress_indicators['rsi_high'] = True
+            stress_score += 0.5
+        
+        # MACD histogram magnitude
+        if abs(macd_hist) >= 2.0:
+            stress_indicators['macd_extreme'] = True
+            stress_score += 1.5
+        elif abs(macd_hist) >= 0.8:
+            stress_indicators['macd_high'] = True
+            stress_score += 0.5
+        
+        # Deviation from MA (as percent)
+        if price_dev >= 0.10:    # >= 10%
+            stress_indicators['price_deviation_extreme'] = True
+            stress_score += 1.0
+        elif price_dev >= 0.05:  # >= 5%
+            stress_indicators['price_deviation_high'] = True
+            stress_score += 0.5
+        
+        # Map score -> stress level
+        if stress_score >= 3.0:
+            stress_level = 'extreme'
+        elif stress_score >= 2.0:
+            stress_level = 'high'
+        elif stress_score >= 1.0:
+            stress_level = 'medium'
+        elif stress_score > 0.0:
+            stress_level = 'low'
+        else:
+            stress_level = 'none'
+        
+        is_stressed = stress_level in ('medium', 'high', 'extreme')
+        
+        # Recommendation: stress => tighten threshold (increase)
+        if stress_level == 'extreme':
+            threshold_recommendation = 'increase'
+            recommended_adjustment = 8.0
+        elif stress_level == 'high':
+            threshold_recommendation = 'increase'
+            recommended_adjustment = 5.0
+        elif stress_level == 'medium':
+            threshold_recommendation = 'increase'
+            recommended_adjustment = 2.0
+        else:
+            threshold_recommendation = 'none'
+            recommended_adjustment = 0.0
+        
+        return {
+            'is_stressed': is_stressed,
+            'stress_level': stress_level,
+            'stress_score': round(stress_score, 3),
+            'indicators': stress_indicators,
+            'threshold_recommendation': threshold_recommendation,
+            'recommended_adjustment': recommended_adjustment,
+            'details': {
+                'atr_ratio': atr_ratio,
+                'rsi': rsi,
+                'macd_histogram': macd_hist,
+                'price_ma_deviation': price_dev
+            }
+        }
+    
+    def compute_adaptive_threshold(self, 
+                                 atr_ratio: float,
+                                 rsi_deviation: float,
+                                 macd_histogram: float,
+                                 price_ma_deviation: float = 0.0,
+                                 symbol: str = "UNKNOWN",
+                                 timeframe: str = "M15") -> Tuple[float, Dict[str, Any]]:
+        """
+        Compute adaptive threshold based on market conditions.
+        
+        Args:
+            atr_ratio: Current ATR as ratio of price (e.g., 0.002 = 0.2%)
+            rsi_deviation: Absolute deviation of RSI from 50 (0-50 range)
+            macd_histogram: MACD histogram magnitude (absolute value)
+            price_ma_deviation: Price deviation from key MAs (percentage)
+            symbol: Trading symbol for logging
+            timeframe: Timeframe for context
+            
+        Returns:
+            Tuple of (adaptive_threshold, metadata_dict)
+        """
+        try:
+            # Prepare market conditions for enhanced volatility analysis
+            market_conditions = {
+                'atr_ratio': atr_ratio,
+                'rsi_deviation': rsi_deviation,
+                'macd_histogram': macd_histogram,
+                'price_ma_deviation': price_ma_deviation
+            }
+            
+            # Calculate individual adjustment components with enhanced volatility analysis
+            volatility_adj, volatility_metadata = self._calculate_volatility_adjustment(atr_ratio, market_conditions)
+            momentum_adj = self._calculate_momentum_adjustment(rsi_deviation, macd_histogram)
+            trend_adj = self._calculate_trend_adjustment(price_ma_deviation)
+            
+            # Apply adaptive parameter adjustment if enabled
+            if self.adaptive_parameters:
+                # Adjust weights based on volatility regime
+                vol_regime = volatility_metadata['volatility_regime']['regime']
+                if vol_regime in ['low', 'normal_low']:
+                    # In low volatility, give more weight to momentum and trend
+                    effective_vol_weight = self.volatility_weight * 0.8
+                    effective_momentum_weight = self.momentum_weight * 1.2
+                    effective_trend_weight = self.trend_weight * 1.1
+                elif vol_regime in ['high', 'extreme']:
+                    # In high volatility, prioritize volatility adjustments
+                    effective_vol_weight = self.volatility_weight * 1.3
+                    effective_momentum_weight = self.momentum_weight * 0.9
+                    effective_trend_weight = self.trend_weight * 0.8
+                else:  # normal_high
+                    effective_vol_weight = self.volatility_weight
+                    effective_momentum_weight = self.momentum_weight
+                    effective_trend_weight = self.trend_weight
+            else:
+                effective_vol_weight = self.volatility_weight
+                effective_momentum_weight = self.momentum_weight
+                effective_trend_weight = self.trend_weight
+            
+            # Combine adjustments with adaptive weights
+            total_adjustment = (
+                volatility_adj * effective_vol_weight +
+                momentum_adj * effective_momentum_weight +
+                trend_adj * effective_trend_weight
+            )
+            
+            # Apply adjustment to base threshold
+            adaptive_threshold = self.base_threshold + total_adjustment
+            
+            # Clamp to min/max bounds
+            clamped_threshold = max(self.min_threshold, 
+                                  min(self.max_threshold, adaptive_threshold))
+            
+            # Create comprehensive metadata for transparency
+            metadata = {
+                "base_threshold": self.base_threshold,
+                "volatility_adjustment": volatility_adj,
+                "momentum_adjustment": momentum_adj,
+                "trend_adjustment": trend_adj,
+                "total_adjustment": total_adjustment,
+                "raw_threshold": adaptive_threshold,
+                "final_threshold": clamped_threshold,
+                "was_clamped": clamped_threshold != adaptive_threshold,
+                "atr_ratio": atr_ratio,
+                "rsi_deviation": rsi_deviation,
+                "enhanced_volatility_analysis": volatility_metadata,
+                "adaptive_weights": {
+                    "volatility": effective_vol_weight,
+                    "momentum": effective_momentum_weight,
+                    "trend": effective_trend_weight
+                } if self.adaptive_parameters else None,
+                "macd_histogram": macd_histogram,
+                "price_ma_deviation": price_ma_deviation,
+                "symbol": symbol,
+                "timeframe": timeframe
+            }
+            
+            logger.debug(f"Adaptive threshold for {symbol} {timeframe}: "
+                        f"{clamped_threshold:.1f}% (base: {self.base_threshold}%, "
+                        f"adj: {total_adjustment:+.1f}%)")
+            
+            return clamped_threshold, metadata
+            
+        except Exception as e:
+            logger.error(f"Error computing adaptive threshold: {e}")
+            # Return base threshold as fallback
+            fallback_metadata = {
+                "base_threshold": self.base_threshold,
+                "final_threshold": self.base_threshold,
+                "error": str(e),
+                "fallback_used": True
+            }
+            return self.base_threshold, fallback_metadata
+    
+    def _calculate_volatility_adjustment(self, atr_ratio: float, market_conditions: Dict[str, Any] = None) -> Tuple[float, Dict[str, Any]]:
+        """
+        Enhanced volatility adjustment calculation using regime classification.
+        
+        Args:
+            atr_ratio: Current ATR ratio
+            market_conditions: Optional market conditions for stress detection
+            
+        Returns:
+            Tuple of (adjustment, adjustment_metadata)
+        """
+        # Classify volatility regime
+        regime, regime_metadata = self.classify_volatility_regime(atr_ratio)
+        
+        # Detect market stress if conditions provided
+        is_stressed = False
+        stress_metadata = {}
+        if market_conditions and self.stress_detection_enabled:
+            stress_result = self.detect_market_stress(market_conditions)
+            is_stressed = stress_result['is_stressed']
+            stress_metadata = stress_result
+        
+        # Base adjustment calculation
+        normalized_atr = atr_ratio / self.atr_factor
+        
+        # Regime-based adjustments
+        if regime == 'low':
+            # Low volatility → tighten thresholds significantly
+            base_adjustment = (1.0 - normalized_atr) * 6.0  # Up to +6%
+        elif regime == 'normal_low':
+            # Normal-low volatility → slight tightening
+            base_adjustment = (1.0 - normalized_atr) * 3.0  # Up to +3%
+        elif regime == 'normal_high':
+            # Normal-high volatility → slight loosening
+            base_adjustment = -(normalized_atr - 1.0) * 2.0  # Up to -2%
+        elif regime == 'high':
+            # High volatility → moderate loosening
+            base_adjustment = -(normalized_atr - 1.0) * 4.0  # Up to -4%
+        else:  # extreme
+            # Extreme volatility → significant loosening
+            base_adjustment = -(normalized_atr - 1.0) * 6.0  # Up to -6%
+        
+        # Apply regime adjustment factor
+        adjustment = base_adjustment * regime_metadata['adjustment_factor']
+        
+        # Market stress modifier
+        if is_stressed:
+            stress_modifier = -2.0 if stress_metadata['stress_level'] == 'extreme' else -1.0
+            adjustment += stress_modifier
+        
+        # Cap adjustment at enhanced range ±10%
+        final_adjustment = max(-10.0, min(10.0, adjustment))
+        
+        # Create comprehensive metadata
+        adjustment_metadata = {
+            'base_adjustment': base_adjustment,
+            'regime_factor': regime_metadata['adjustment_factor'],
+            'stress_modifier': stress_modifier if is_stressed else 0.0,
+            'final_adjustment': final_adjustment,
+            'volatility_regime': regime_metadata,
+            'market_stress': stress_metadata,
+            'was_capped': final_adjustment != adjustment
+        }
+        
+        return final_adjustment, adjustment_metadata
+    
+    def _calculate_momentum_adjustment(self, rsi_deviation: float, macd_histogram: float) -> float:
+        """
+        Calculate threshold adjustment based on momentum indicators.
+        
+        Strong momentum → loosen thresholds (easier to trigger signals)
+        Weak momentum → tighten thresholds (require stronger confirmation)
+        """
+        # RSI deviation component (0-50 range)
+        rsi_component = (rsi_deviation / 50.0) * 3.0  # Up to ±3%
+        
+        # MACD histogram component (normalize to reasonable range)
+        macd_normalized = min(abs(macd_histogram) * 1000, 10.0)  # Cap at 10
+        macd_component = (macd_normalized / 10.0) * 2.0  # Up to ±2%
+        
+        # Strong momentum → negative adjustment (loosen threshold)
+        momentum_strength = rsi_component + macd_component
+        adjustment = -momentum_strength  # Negative = loosen
+        
+        # Cap adjustment at ±5%
+        return max(-5.0, min(5.0, adjustment))
+    
+    def _calculate_trend_adjustment(self, price_ma_deviation: float) -> float:
+        """
+        Calculate threshold adjustment based on price deviation from key MAs.
+        
+        Price far from MAs → tighten thresholds (require stronger signals)
+        Price near MAs → neutral adjustment
+        """
+        # Normalize deviation (percentage)
+        normalized_deviation = abs(price_ma_deviation)
+        
+        # Large deviation → tighten threshold
+        if normalized_deviation > 2.0:  # > 2% deviation
+            adjustment = min(normalized_deviation, 5.0)  # Up to +5%
+        else:
+            adjustment = 0.0  # No adjustment for small deviations
+        
+        return adjustment
+    
+    def compute_dynamic_threshold_with_votes(self,
+                                           vote_result: Dict[str, Any],
+                                           market_conditions: Dict[str, Any],
+                                           symbol: str = "UNKNOWN",
+                                           timeframe: str = "M15") -> Tuple[float, Dict[str, Any]]:
+        """
+        Compute dynamic threshold based on weighted vote results and market conditions.
+        
+        This method integrates the weighted voting system with adaptive thresholds
+        to provide more responsive signal filtering.
+        
+        Args:
+            vote_result: Results from compute_weighted_vote_aggregation
+            market_conditions: Dict containing market data (ATR, RSI, MACD, etc.)
+            symbol: Trading symbol for logging
+            timeframe: Timeframe for context
+            
+        Returns:
+            Tuple of (dynamic_threshold, metadata_dict)
+        """
+        try:
+            # Extract market conditions
+            atr_ratio = market_conditions.get('atr_ratio', 0.002)
+            rsi_deviation = market_conditions.get('rsi_deviation', 0.0)
+            macd_histogram = market_conditions.get('macd_histogram', 0.0)
+            price_ma_deviation = market_conditions.get('price_ma_deviation', 0.0)
+            
+            # Get base adaptive threshold
+            base_threshold, base_metadata = self.compute_adaptive_threshold(
+                atr_ratio, rsi_deviation, macd_histogram, price_ma_deviation, symbol, timeframe
+            )
+            
+            # Extract vote metrics
+            vote_confidence = vote_result.get('confidence', 0.0)
+            strong_signals = vote_result.get('strong_signals', 0)
+            weak_signals = vote_result.get('weak_signals', 0)
+            total_vote_score = abs(vote_result.get('total_vote_score', 0.0))
+            indicator_count = vote_result.get('indicator_count', 0)
+            
+            # Calculate vote-based adjustments
+            vote_adjustments = self._calculate_vote_based_adjustments(
+                vote_confidence, strong_signals, weak_signals, total_vote_score, indicator_count
+            )
+            
+            # Apply vote adjustments to base threshold
+            dynamic_threshold = base_threshold + vote_adjustments['total_adjustment']
+
+            # Ensure threshold stays within expanded dynamic range [45, 75]
+            dynamic_min = 45.0
+            dynamic_max = 75.0
+            clamped_threshold = max(dynamic_min, min(dynamic_max, dynamic_threshold))
+
+            auto_threshold = None
+            regime = base_metadata.get("enhanced_volatility_analysis", {}).get(
+                "volatility_regime", {}
+            ).get("regime", "unknown")
+            if self._auto is not None and config.AUTO_THRESHOLD_ENABLED:
+                auto_threshold = self._auto.threshold(symbol, regime)
+                clamped_threshold = max(clamped_threshold, auto_threshold)
+
+            # Create comprehensive metadata
+            metadata = {
+                **base_metadata,
+                "vote_confidence": vote_confidence,
+                "strong_signals": strong_signals,
+                "weak_signals": weak_signals,
+                "total_vote_score": total_vote_score,
+                "indicator_count": indicator_count,
+                "vote_adjustments": vote_adjustments,
+                "dynamic_threshold": dynamic_threshold,
+                "final_threshold": clamped_threshold,
+                "dynamic_range": [dynamic_min, dynamic_max],
+                "was_vote_clamped": clamped_threshold != dynamic_threshold,
+                "market_conditions": market_conditions,
+                "auto_threshold": auto_threshold,
+                "auto_threshold_regime": regime,
+            }
+            
+            logger.debug(f"Dynamic threshold for {symbol} {timeframe}: "
+                        f"{clamped_threshold:.1f}% (base: {base_threshold:.1f}%, "
+                        f"vote_adj: {vote_adjustments['total_adjustment']:+.1f}%)")
+            
+            return clamped_threshold, metadata
+            
+        except Exception as e:
+            logger.error(f"Error computing dynamic threshold with votes: {e}")
+            # Fallback to base adaptive threshold
+            return self.compute_adaptive_threshold(
+                market_conditions.get('atr_ratio', 0.002),
+                market_conditions.get('rsi_deviation', 0.0),
+                market_conditions.get('macd_histogram', 0.0),
+                market_conditions.get('price_ma_deviation', 0.0),
+                symbol, timeframe
+            )
+    
+    def _calculate_vote_based_adjustments(self,
+                                        confidence: float,
+                                        strong_signals: int,
+                                        weak_signals: int,
+                                        vote_score: float,
+                                        indicator_count: int) -> Dict[str, float]:
+        """
+        Calculate threshold adjustments based on weighted vote results.
+        
+        Args:
+            confidence: Vote confidence (0.0 to 1.0)
+            strong_signals: Number of strong signals
+            weak_signals: Number of weak signals
+            vote_score: Absolute total vote score
+            indicator_count: Total number of valid indicators
+            
+        Returns:
+            Dict containing individual and total adjustments
+        """
+        # Confidence adjustment: High confidence → loosen threshold (negative)
+        confidence_adj = -(confidence * 8.0)  # Up to -8% for max confidence
+        
+        # Signal strength adjustment: More strong signals → loosen threshold
+        if strong_signals >= 3:
+            strength_adj = -5.0  # Strong consensus
+        elif strong_signals >= 2:
+            strength_adj = -3.0  # Moderate consensus
+        elif strong_signals == 1 and weak_signals >= 2:
+            strength_adj = -1.0  # Mixed but leaning strong
+        else:
+            strength_adj = 0.0   # No strong signals
+        
+        # Vote score adjustment: Higher absolute score → loosen threshold
+        score_adj = -(min(vote_score, 1.0) * 3.0)  # Up to -3%
+        
+        # Indicator coverage adjustment: More indicators → slight loosening
+        if indicator_count >= 5:
+            coverage_adj = -1.0  # Good coverage
+        elif indicator_count >= 3:
+            coverage_adj = -0.5  # Moderate coverage
+        else:
+            coverage_adj = 1.0   # Poor coverage, tighten
+        
+        # Combine adjustments
+        total_adjustment = confidence_adj + strength_adj + score_adj + coverage_adj
+        
+        # Cap total adjustment at ±10%
+        total_adjustment = max(-10.0, min(10.0, total_adjustment))
+        
+        return {
+            "confidence_adjustment": confidence_adj,
+            "strength_adjustment": strength_adj,
+            "score_adjustment": score_adj,
+            "coverage_adjustment": coverage_adj,
+            "total_adjustment": total_adjustment
+        }
+
+    def get_threshold_for_conditions(self, market_conditions: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+        """
+        Convenience method to compute threshold from market conditions dict.
+        
+        Args:
+            market_conditions: Dict containing market data
+            
+        Returns:
+            Tuple of (threshold, metadata)
+        """
+        atr_ratio = market_conditions.get('atr_ratio', 0.002)
+        rsi = market_conditions.get('rsi', 50.0)
+        rsi_deviation = abs(rsi - 50.0)
+        macd_histogram = abs(market_conditions.get('macd_histogram', 0.0))
+        price_ma_deviation = market_conditions.get('price_ma_deviation', 0.0)
+        symbol = market_conditions.get('symbol', 'UNKNOWN')
+        timeframe = market_conditions.get('timeframe', 'M15')
+        
+        return self.compute_adaptive_threshold(
+            atr_ratio=atr_ratio,
+            rsi_deviation=rsi_deviation,
+            macd_histogram=macd_histogram,
+            price_ma_deviation=price_ma_deviation,
+            symbol=symbol,
+            timeframe=timeframe
+        )
+    
+    def update_config(self, config_updates: Dict[str, Any]) -> None:
+        """
+        Update threshold manager configuration dynamically.
+        
+        Args:
+            config_updates: Dict of configuration parameters to update
+        """
+        for key, value in config_updates.items():
+            if hasattr(self, key):
+                old_value = getattr(self, key)
+                setattr(self, key, value)
+                logger.info(f"Updated {key}: {old_value} → {value}")
+            else:
+                logger.warning(f"Unknown config parameter: {key}")
+
+
+class ThresholdManagerFactory:
+    """Factory for creating ThresholdManager instances with different configurations."""
+    
+    @staticmethod
+    def create_conservative() -> ThresholdManager:
+        """Create a conservative threshold manager (higher thresholds)."""
+        return ThresholdManager(
+            base_threshold=65.0,
+            min_threshold=55.0,
+            max_threshold=80.0,
+            volatility_weight=1.2,
+            momentum_weight=0.8
+        )
+    
+    @staticmethod
+    def create_aggressive() -> ThresholdManager:
+        """Create an aggressive threshold manager (lower thresholds)."""
+        return ThresholdManager(
+            base_threshold=55.0,
+            min_threshold=40.0,
+            max_threshold=70.0,
+            volatility_weight=0.8,
+            momentum_weight=1.2
+        )
+    
+    @staticmethod
+    def create_from_config(config: Dict[str, Any]) -> ThresholdManager:
+        """Create threshold manager from configuration dict."""
+        return ThresholdManager(
+            base_threshold=config.get('base_threshold', 60.0),
+            atr_factor=config.get('atr_factor', 0.002),
+            min_threshold=config.get('min_threshold', 45.0),
+            max_threshold=config.get('max_threshold', 75.0),
+            volatility_weight=config.get('volatility_weight', 1.0),
+            momentum_weight=config.get('momentum_weight', 1.0),
+            trend_weight=config.get('trend_weight', 0.8)
+        )
