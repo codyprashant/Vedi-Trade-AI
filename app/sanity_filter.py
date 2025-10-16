@@ -12,7 +12,78 @@ from typing import Dict, Any, Tuple, List, Optional
 import numpy as np
 from datetime import datetime, timedelta
 
+from app.config_sanity import get_sanity_params
+
 logger = logging.getLogger(__name__)
+
+_SANITY_OVERRIDE_STACK: List[Dict[str, Any]] = []
+
+
+def _apply_config_overrides(cfg: Dict[str, float], overrides: Dict[str, Any]) -> Dict[str, float]:
+    """Apply override rules to a sanity configuration dictionary."""
+
+    updated = dict(cfg)
+    for key, rule in (overrides or {}).items():
+        if key not in updated:
+            continue
+        if isinstance(rule, dict):
+            if "set" in rule:
+                updated[key] = rule["set"]
+            elif "scale" in rule:
+                try:
+                    updated[key] = updated[key] * rule["scale"]
+                except Exception:
+                    logger.debug("Failed to scale sanity override", exc_info=True)
+        else:
+            updated[key] = rule
+    return updated
+
+
+def _get_active_overrides() -> List[Dict[str, Any]]:
+    return [override for override in _SANITY_OVERRIDE_STACK if override]
+
+
+def sanity_check(candle, atr, confidence, symbol, logger):
+    cfg = get_sanity_params(symbol)
+    for override in _get_active_overrides():
+        cfg = _apply_config_overrides(cfg, override)
+
+    price = candle.get("close") or 1
+    rel_atr = atr / price if price else 0.0
+    body_ratio = abs(candle["close"] - candle["open"]) / (candle["high"] - candle["low"] + 1e-9)
+    wick_ratio = (candle["high"] - candle["low"]) / (abs(candle["close"] - candle["open"]) + 1e-9)
+
+    penalty = 0.0
+    reasons = []
+
+    if rel_atr < cfg["relative_atr_min"]:
+        penalty += 0.3
+        reasons.append(f"below_minimum_volatility ({rel_atr:.6f} < {cfg['relative_atr_min']})")
+
+    if body_ratio < cfg["body_ratio_min"]:
+        penalty += 0.2
+        reasons.append(f"body_ratio_too_small ({body_ratio:.3f} < {cfg['body_ratio_min']})")
+
+    if wick_ratio > cfg["wick_ratio_max"]:
+        penalty += 0.2
+        reasons.append(f"excessive_wicks (ratio={wick_ratio:.2f} > {cfg['wick_ratio_max']})")
+
+    if confidence < cfg["min_confidence"]:
+        penalty += 0.3
+        reasons.append(f"low_confidence_{confidence*100:.1f}_min_{cfg['min_confidence']*100:.1f}")
+
+    score = max(0.0, 1.0 - penalty)
+    passed = score >= 0.5
+
+    logger.info({
+        "event": "sanity_check",
+        "symbol": symbol,
+        "passed": passed,
+        "score": round(score, 3),
+        "reasons": reasons,
+    })
+
+    return passed, reasons, score
 
 class SignalSanityFilter:
     """
@@ -904,6 +975,9 @@ def apply_sanity_overrides(
 ):
     """Temporarily adjust sanity filter thresholds."""
 
+    if overrides:
+        _SANITY_OVERRIDE_STACK.append(overrides)
+
     if not overrides:
         yield filter_obj
         return
@@ -925,3 +999,5 @@ def apply_sanity_overrides(
     finally:
         for attr, value in original_values.items():
             setattr(filter_obj, attr, value)
+        if overrides:
+            _SANITY_OVERRIDE_STACK.pop()
