@@ -199,61 +199,74 @@ class BacktestEngine:
             raise
     
     def _evaluate_signal_for_backtest(self, historical_data: pd.DataFrame, current_timestamp) -> Optional[Dict[str, Any]]:
-        """Simplified signal evaluation for backtesting purposes."""
+        """
+        Comprehensive signal evaluation using the same gate logic as live SignalEngine.
+        This ensures backtesting results accurately reflect live trading performance.
+        """
         try:
-            from app.indicators import compute_indicators, evaluate_signals, compute_strategy_strength, best_signal
-            from app.config import WEIGHTS, SIGNAL_THRESHOLD
             from app.utils_time import as_utc_index
             
             # Ensure proper time indexing
             historical_data = as_utc_index(historical_data)
             
-            # Compute indicators
-            indicators = compute_indicators(historical_data)
+            # Use the SignalEngine's comprehensive evaluation logic
+            # This includes all gates: Tier1, Tier2 (ThresholdManager), Sanity, and MTF
+            signal_result = self.signal_engine.evaluate_signal(
+                symbol=self.symbol,
+                historical_data=historical_data,
+                current_timestamp=current_timestamp
+            )
             
-            # Evaluate signals
-            signals = evaluate_signals(indicators)
-            
-            # Compute strategy strength
-            strength = compute_strategy_strength(signals, WEIGHTS)
-            
-            # Get best signal
-            signal_info = best_signal(signals, strength)
-            
-            if signal_info and signal_info.get('strength', 0) >= SIGNAL_THRESHOLD:
-                # Calculate entry price and levels
+            # Check if signal passed all gates
+            if signal_result and signal_result.get('had_signal') and signal_result.get('confidence_passed'):
+                # Extract signal information
+                direction = signal_result.get('direction')
                 current_close = historical_data.iloc[-1]['close']
                 
-                # Simple ATR-based stop loss and take profit
-                atr_period = 14
-                if len(historical_data) >= atr_period:
-                    high_low = historical_data['high'] - historical_data['low']
-                    high_close = abs(historical_data['high'] - historical_data['close'].shift(1))
-                    low_close = abs(historical_data['low'] - historical_data['close'].shift(1))
-                    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-                    atr = true_range.rolling(window=atr_period).mean().iloc[-1]
-                else:
-                    atr = current_close * 0.02  # 2% fallback
-                
-                direction = signal_info['direction']
-                if direction == 'buy':
+                # Use SignalEngine's calculated levels if available, otherwise fallback to ATR-based
+                if 'stop_loss_price' in signal_result and 'take_profit_price' in signal_result:
                     entry_price = current_close
-                    stop_loss_price = current_close - (2 * atr)
-                    take_profit_price = current_close + (3 * atr)
-                elif direction == 'sell':
-                    entry_price = current_close
-                    stop_loss_price = current_close + (2 * atr)
-                    take_profit_price = current_close - (3 * atr)
+                    stop_loss_price = signal_result['stop_loss_price']
+                    take_profit_price = signal_result['take_profit_price']
                 else:
-                    return None
+                    # Fallback to ATR-based calculation
+                    atr_period = 14
+                    if len(historical_data) >= atr_period:
+                        high_low = historical_data['high'] - historical_data['low']
+                        high_close = abs(historical_data['high'] - historical_data['close'].shift(1))
+                        low_close = abs(historical_data['low'] - historical_data['close'].shift(1))
+                        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+                        atr = true_range.rolling(window=atr_period).mean().iloc[-1]
+                    else:
+                        atr = current_close * 0.02  # 2% fallback
+                    
+                    if direction == 'buy':
+                        entry_price = current_close
+                        stop_loss_price = current_close - (2 * atr)
+                        take_profit_price = current_close + (3 * atr)
+                    elif direction == 'sell':
+                        entry_price = current_close
+                        stop_loss_price = current_close + (2 * atr)
+                        take_profit_price = current_close - (3 * atr)
+                    else:
+                        return None
                 
                 return {
                     'direction': direction,
                     'entry_price': entry_price,
                     'stop_loss_price': stop_loss_price,
                     'take_profit_price': take_profit_price,
-                    'confidence': signal_info.get('confidence', 0),
-                    'strength': signal_info.get('strength', 0)
+                    'confidence': signal_result.get('confidence', 'medium'),
+                    'strength': signal_result.get('final_strength', signal_result.get('strength', 0)),
+                    'reason': signal_result.get('decision_summary', ''),
+                    'indicators': signal_result.get('indicators', {}),
+                    'threshold_factors': signal_result.get('threshold_factors', {}),
+                    'validation_results': {
+                        'tier1_passed': signal_result.get('tier1_passed', False),
+                        'tier2_passed': signal_result.get('tier2_passed', False),
+                        'sanity_passed': signal_result.get('sanity_passed', False),
+                        'mtf_confirmed': signal_result.get('mtf_confirmed', False)
+                    }
                 }
             
             return None

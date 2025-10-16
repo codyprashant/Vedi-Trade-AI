@@ -30,7 +30,7 @@ class TestWeightedVotingSystem(unittest.TestCase):
             "ATR": 5
         }
     
-    def create_indicator_result(self, direction: str, vote: int, strength: float, label: str) -> IndicatorResult:
+    def create_indicator_result(self, direction: str, vote: int, strength: float, label: str, effective_weight: float = None) -> IndicatorResult:
         """Create a mock IndicatorResult for testing."""
         result = IndicatorResult(
             direction=direction,
@@ -38,7 +38,8 @@ class TestWeightedVotingSystem(unittest.TestCase):
             contribution=0.0,  # Required parameter
             vote=vote,
             strength=strength,
-            label=label
+            label=label,
+            effective_weight=effective_weight if effective_weight is not None else 1.0  # Default to 1.0 for testing
         )
         return result
     
@@ -48,11 +49,11 @@ class TestWeightedVotingSystem(unittest.TestCase):
         
         # Create strong bullish indicators
         indicators = {
-            "RSI": self.create_indicator_result("buy", 1, 85.0, "strong"),
-            "MACD": self.create_indicator_result("buy", 1, 90.0, "strong"),
-            "BBANDS": self.create_indicator_result("buy", 1, 75.0, "strong"),
-            "STOCH": self.create_indicator_result("buy", 1, 80.0, "strong"),
-            "ATR": self.create_indicator_result("neutral", 0, 50.0, "weak")
+            "RSI": self.create_indicator_result("buy", 1, 85.0, "strong", self.default_weights["RSI"]),
+            "MACD": self.create_indicator_result("buy", 1, 90.0, "strong", self.default_weights["MACD"]),
+            "BBANDS": self.create_indicator_result("buy", 1, 75.0, "strong", self.default_weights["BBANDS"]),
+            "STOCH": self.create_indicator_result("buy", 1, 80.0, "strong", self.default_weights["STOCH"]),
+            "ATR": self.create_indicator_result("neutral", 0, 50.0, "weak", self.default_weights["ATR"])
         }
         
         result = compute_weighted_vote_aggregation(indicators, self.default_weights)
@@ -74,11 +75,11 @@ class TestWeightedVotingSystem(unittest.TestCase):
         
         # Create mixed indicators
         indicators = {
-            "RSI": self.create_indicator_result("buy", 1, 60.0, "weak"),
-            "MACD": self.create_indicator_result("sell", -1, 55.0, "weak"),
-            "BBANDS": self.create_indicator_result("neutral", 0, 50.0, "weak"),
-            "STOCH": self.create_indicator_result("buy", 1, 70.0, "strong"),
-            "ATR": self.create_indicator_result("neutral", 0, 45.0, "weak")
+            "RSI": self.create_indicator_result("buy", 1, 60.0, "weak", self.default_weights["RSI"]),
+            "MACD": self.create_indicator_result("sell", -1, 55.0, "weak", self.default_weights["MACD"]),
+            "BBANDS": self.create_indicator_result("neutral", 0, 50.0, "weak", self.default_weights["BBANDS"]),
+            "STOCH": self.create_indicator_result("buy", 1, 70.0, "strong", self.default_weights["STOCH"]),
+            "ATR": self.create_indicator_result("neutral", 0, 45.0, "weak", self.default_weights["ATR"])
         }
         
         result = compute_weighted_vote_aggregation(indicators, self.default_weights)
@@ -99,11 +100,11 @@ class TestWeightedVotingSystem(unittest.TestCase):
         
         # Create strong bearish indicators
         indicators = {
-            "RSI": self.create_indicator_result("sell", -1, 85.0, "strong"),
-            "MACD": self.create_indicator_result("sell", -1, 90.0, "strong"),
-            "BBANDS": self.create_indicator_result("sell", -1, 75.0, "strong"),
-            "STOCH": self.create_indicator_result("sell", -1, 80.0, "strong"),
-            "ATR": self.create_indicator_result("neutral", 0, 60.0, "weak")
+            "RSI": self.create_indicator_result("sell", -1, 85.0, "strong", self.default_weights["RSI"]),
+            "MACD": self.create_indicator_result("sell", -1, 90.0, "strong", self.default_weights["MACD"]),
+            "BBANDS": self.create_indicator_result("sell", -1, 75.0, "strong", self.default_weights["BBANDS"]),
+            "STOCH": self.create_indicator_result("sell", -1, 80.0, "strong", self.default_weights["STOCH"]),
+            "ATR": self.create_indicator_result("neutral", 0, 60.0, "weak", self.default_weights["ATR"])
         }
         
         result = compute_weighted_vote_aggregation(indicators, self.default_weights)
@@ -125,11 +126,11 @@ class TestWeightedVotingSystem(unittest.TestCase):
         
         # Create neutral indicators
         indicators = {
-            "RSI": self.create_indicator_result("neutral", 0, 50.0, "weak"),
-            "MACD": self.create_indicator_result("neutral", 0, 45.0, "weak"),
-            "BBANDS": self.create_indicator_result("neutral", 0, 48.0, "weak"),
-            "STOCH": self.create_indicator_result("neutral", 0, 52.0, "weak"),
-            "ATR": self.create_indicator_result("neutral", 0, 40.0, "weak")
+            "RSI": self.create_indicator_result("neutral", 0, 50.0, "weak", self.default_weights["RSI"]),
+            "MACD": self.create_indicator_result("neutral", 0, 45.0, "weak", self.default_weights["MACD"]),
+            "BBANDS": self.create_indicator_result("neutral", 0, 48.0, "weak", self.default_weights["BBANDS"]),
+            "STOCH": self.create_indicator_result("neutral", 0, 52.0, "weak", self.default_weights["STOCH"]),
+            "ATR": self.create_indicator_result("neutral", 0, 40.0, "weak", self.default_weights["ATR"])
         }
         
         result = compute_weighted_vote_aggregation(indicators, self.default_weights)
@@ -151,8 +152,8 @@ class TestWeightedVotingSystem(unittest.TestCase):
         
         # Create partial indicator set
         indicators = {
-            "RSI": self.create_indicator_result("buy", 1, 85.0, "strong"),
-            "MACD": self.create_indicator_result("buy", 1, 70.0, "strong"),
+            "RSI": self.create_indicator_result("buy", 1, 85.0, "strong", self.default_weights["RSI"]),
+            "MACD": self.create_indicator_result("buy", 1, 70.0, "strong", self.default_weights["MACD"]),
             # Missing BBANDS, STOCH, ATR
         }
         
@@ -173,8 +174,8 @@ class TestWeightedVotingSystem(unittest.TestCase):
         print("\n🧪 Testing Vote Breakdown Accuracy")
         
         indicators = {
-            "RSI": self.create_indicator_result("buy", 1, 85.0, "strong"),
-            "MACD": self.create_indicator_result("sell", -1, 55.0, "weak")
+            "RSI": self.create_indicator_result("buy", 1, 85.0, "strong", 20),  # Use explicit weight
+            "MACD": self.create_indicator_result("sell", -1, 55.0, "weak", 10)   # Use explicit weight
         }
         
         weights = {"RSI": 20, "MACD": 10}

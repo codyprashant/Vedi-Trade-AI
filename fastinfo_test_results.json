@@ -4,7 +4,7 @@
     "yahoo_symbol": "GC=F",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T23:25:56.900939",
+    "timestamp": "2025-10-16T07:55:30.986824",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -35,12 +35,12 @@
         "is_none": false
       },
       "dayHigh": {
-        "value": 4235.7998046875,
+        "value": 4255.39990234375,
         "type": "<class 'float'>",
         "is_none": false
       },
       "dayLow": {
-        "value": 4157.2998046875,
+        "value": 4214.5,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -50,17 +50,17 @@
         "is_none": false
       },
       "fiftyDayAverage": {
-        "value": 3623.1939990234373,
+        "value": 3639.0939990234374,
         "type": "<class 'float'>",
         "is_none": false
       },
       "lastPrice": {
-        "value": 4224.89990234375,
+        "value": 4220.0,
         "type": "<class 'float'>",
         "is_none": false
       },
       "lastVolume": {
-        "value": 301947,
+        "value": 81732,
         "type": "<class 'int'>",
         "is_none": false
       },
@@ -70,12 +70,12 @@
         "is_none": true
       },
       "open": {
-        "value": 4160.10009765625,
+        "value": 4225.10009765625,
         "type": "<class 'float'>",
         "is_none": false
       },
       "previousClose": {
-        "value": 4206.0,
+        "value": 4247.60009765625,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -85,7 +85,7 @@
         "is_none": false
       },
       "regularMarketPreviousClose": {
-        "value": 4138.7001953125,
+        "value": 4176.89990234375,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -95,12 +95,12 @@
         "is_none": true
       },
       "tenDayAverageVolume": {
-        "value": 2015,
+        "value": 2153,
         "type": "<class 'int'>",
         "is_none": false
       },
       "threeMonthAverageVolume": {
-        "value": 3609,
+        "value": 3654,
         "type": "<class 'int'>",
         "is_none": false
       },
@@ -110,17 +110,17 @@
         "is_none": false
       },
       "twoHundredDayAverage": {
-        "value": 3247.6444437046243,
+        "value": 3255.311110371291,
         "type": "<class 'float'>",
         "is_none": false
       },
       "yearChange": {
-        "value": 0.5477562435723635,
+        "value": 0.5521738767535302,
         "type": "<class 'float'>",
         "is_none": false
       },
       "yearHigh": {
-        "value": 4160.10009765625,
+        "value": 4210.60009765625,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -136,7 +136,7 @@
     "yahoo_symbol": "USDCAD=X",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T23:25:58.142512",
+    "timestamp": "2025-10-16T07:55:32.461988",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -167,12 +167,12 @@
         "is_none": false
       },
       "dayHigh": {
-        "value": 1.4059799909591675,
+        "value": 1.4048000574111938,
         "type": "<class 'float'>",
         "is_none": false
       },
       "dayLow": {
-        "value": 1.4023000001907349,
+        "value": 1.4018000364303589,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -182,12 +182,12 @@
         "is_none": false
       },
       "fiftyDayAverage": {
-        "value": 1.3844206047058105,
+        "value": 1.3849692058563232,
         "type": "<class 'float'>",
         "is_none": false
       },
       "lastPrice": {
-        "value": 1.4039299488067627,
+        "value": 1.403190016746521,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -202,7 +202,7 @@
         "is_none": true
       },
       "open": {
-        "value": 1.4042500257492065,
+        "value": 1.4041399955749512,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -217,7 +217,7 @@
         "is_none": false
       },
       "regularMarketPreviousClose": {
-        "value": 1.4039000272750854,
+        "value": 1.4045000076293945,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -242,12 +242,12 @@
         "is_none": false
       },
       "twoHundredDayAverage": {
-        "value": 1.3975754091233918,
+        "value": 1.397414247796993,
         "type": "<class 'float'>",
         "is_none": false
       },
       "yearChange": {
-        "value": 0.018714017866990184,
+        "value": 0.021083274905902224,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -268,7 +268,7 @@
     "yahoo_symbol": "GBPUSD=X",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T23:25:58.999100",
+    "timestamp": "2025-10-16T07:55:33.256591",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -299,12 +299,12 @@
         "is_none": false
       },
       "dayHigh": {
-        "value": 1.3406263589859009,
+        "value": 1.344212532043457,
         "type": "<class 'float'>",
         "is_none": false
       },
       "dayLow": {
-        "value": 1.3317352533340454,
+        "value": 1.3393874168395996,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -314,12 +314,12 @@
         "is_none": false
       },
       "fiftyDayAverage": {
-        "value": 1.347447283267975,
+        "value": 1.3474915766716002,
         "type": "<class 'float'>",
         "is_none": false
       },
       "lastPrice": {
-        "value": 1.3401232957839966,
+        "value": 1.3419936895370483,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -334,12 +334,12 @@
         "is_none": true
       },
       "open": {
-        "value": 1.3318772315979004,
+        "value": 1.3396564722061157,
         "type": "<class 'float'>",
         "is_none": false
       },
       "previousClose": {
-        "value": 1.3320368528366089,
+        "value": 1.3404287099838257,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -349,7 +349,7 @@
         "is_none": false
       },
       "regularMarketPreviousClose": {
-        "value": 1.3332622051239014,
+        "value": 1.3321610689163208,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -374,12 +374,12 @@
         "is_none": false
       },
       "twoHundredDayAverage": {
-        "value": 1.3176681369242043,
+        "value": 1.3180942776227238,
         "type": "<class 'float'>",
         "is_none": false
       },
       "yearChange": {
-        "value": 0.020412233545118345,
+        "value": 0.02551090966905066,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -400,7 +400,7 @@
     "yahoo_symbol": "^GSPC",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T23:25:59.890938",
+    "timestamp": "2025-10-16T07:55:34.006087",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -446,7 +446,7 @@
         "is_none": false
       },
       "fiftyDayAverage": {
-        "value": 6544.438984375,
+        "value": 6551.87638671875,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -456,7 +456,7 @@
         "is_none": false
       },
       "lastVolume": {
-        "value": 2936923000,
+        "value": 5633060000,
         "type": "<class 'int'>",
         "is_none": false
       },
@@ -491,12 +491,12 @@
         "is_none": true
       },
       "tenDayAverageVolume": {
-        "value": 5544185000,
+        "value": 5503696000,
         "type": "<class 'int'>",
         "is_none": false
       },
       "threeMonthAverageVolume": {
-        "value": 5185220461,
+        "value": 5192903384,
         "type": "<class 'int'>",
         "is_none": false
       },
@@ -506,12 +506,12 @@
         "is_none": false
       },
       "twoHundredDayAverage": {
-        "value": 6055.933391113282,
+        "value": 6059.1007421875,
         "type": "<class 'float'>",
         "is_none": false
       },
       "yearChange": {
-        "value": 0.13724329166673283,
+        "value": 0.14201730270607743,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -532,7 +532,7 @@
     "yahoo_symbol": "AAPL",
     "fast_info_available": true,
     "fast_info_type": "<class 'yfinance.scrapers.quote.FastInfo'>",
-    "timestamp": "2025-10-15T23:26:00.643300",
+    "timestamp": "2025-10-16T07:55:35.692225",
     "available_keys": [
       "currency",
       "dayHigh",
@@ -568,7 +568,7 @@
         "is_none": false
       },
       "dayLow": {
-        "value": 247.47999572753906,
+        "value": 247.47000122070312,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -578,7 +578,7 @@
         "is_none": false
       },
       "fiftyDayAverage": {
-        "value": 238.8127993774414,
+        "value": 239.74119934082032,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -588,7 +588,7 @@
         "is_none": false
       },
       "lastVolume": {
-        "value": 31761708,
+        "value": 33839800,
         "type": "<class 'int'>",
         "is_none": false
       },
@@ -598,7 +598,7 @@
         "is_none": false
       },
       "open": {
-        "value": 249.3800048828125,
+        "value": 249.49000549316406,
         "type": "<class 'float'>",
         "is_none": false
       },
@@ -623,12 +623,12 @@
         "is_none": false
       },
       "tenDayAverageVolume": {
-        "value": 42755850,
+        "value": 41268440,
         "type": "<class 'int'>",
         "is_none": false
       },
       "threeMonthAverageVolume": {
-        "value": 54531481,
+        "value": 54401381,
         "type": "<class 'int'>",
         "is_none": false
       },
@@ -638,12 +638,12 @@
         "is_none": false
       },
       "twoHundredDayAverage": {
-        "value": 222.1646499633789,
+        "value": 222.11625,
         "type": "<class 'float'>",
         "is_none": false
       },
       "yearChange": {
-        "value": 0.06898785735342892,
+        "value": 0.07404696486475579,
         "type": "<class 'float'>",
         "is_none": false
       },

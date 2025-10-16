@@ -32,6 +32,7 @@ class IndicatorResult:
     vote: int  # -1 (sell), 0 (neutral), +1 (buy)
     strength: float  # 0.0 to 1.0
     label: str  # 'weak' or 'strong'
+    effective_weight: float = 0.0  # 0 if NaN inputs, else normal weight
 
 
 def compute_indicators(df: pd.DataFrame, params: Dict[str, Dict] | None = None) -> Dict[str, pd.Series]:
@@ -226,7 +227,9 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
         rsi_val = np.nan
     # Convert direction to vote system
     rsi_vote, rsi_strength, rsi_label = _direction_to_vote_system(rsi_dir)
-    results["RSI"] = IndicatorResult(rsi_dir, {"rsi": rsi_val}, 0, rsi_vote, rsi_strength, rsi_label)
+    # Set effective_weight: 0 if NaN inputs, else normal weight
+    rsi_effective_weight = 0.0 if rsi_val is None else WEIGHTS.get("RSI", 8.0)
+    results["RSI"] = IndicatorResult(rsi_dir, {"rsi": rsi_val}, 0, rsi_vote, rsi_strength, rsi_label, rsi_effective_weight)
 
     # Enhanced MACD with histogram magnitude and soft signals
     macd_val = safe_float(ind["macd"].iloc[-1])
@@ -260,7 +263,10 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     macd_sig_out = float(ind["macd_signal"].iloc[-1]) if macd_sig is not None else np.nan
     # Convert direction to vote system
     macd_vote, macd_strength, macd_label = _direction_to_vote_system(macd_dir)
-    results["MACD"] = IndicatorResult(macd_dir, {"macd": macd_val_out, "signal": macd_sig_out}, 0, macd_vote, macd_strength, macd_label)
+    # Set effective_weight: 0 if any critical NaN inputs, else normal weight
+    macd_has_nan = any(v is None for v in [macd_val, macd_sig])
+    macd_effective_weight = 0.0 if macd_has_nan else WEIGHTS.get("MACD", 9.0)
+    results["MACD"] = IndicatorResult(macd_dir, {"macd": macd_val_out, "signal": macd_sig_out}, 0, macd_vote, macd_strength, macd_label, macd_effective_weight)
 
     # Enhanced SMA cross with trend strength
     sma_s = safe_float(ind["sma_short"].iloc[-1])
@@ -288,7 +294,10 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     sma_l_out = float(ind["sma_long"].iloc[-1]) if sma_l is not None else np.nan
     # Convert direction to vote system
     sma_vote, sma_strength, sma_label = _direction_to_vote_system(sma_dir)
-    results["SMA"] = IndicatorResult(sma_dir, {"sma50": sma_s_out, "sma200": sma_l_out}, 0, sma_vote, sma_strength, sma_label)
+    # Set effective_weight: 0 if any critical NaN inputs, else normal weight
+    sma_has_nan = any(v is None for v in [sma_s, sma_l])
+    sma_effective_weight = 0.0 if sma_has_nan else WEIGHTS.get("SMA", 7.5)
+    results["SMA"] = IndicatorResult(sma_dir, {"sma50": sma_s_out, "sma200": sma_l_out}, 0, sma_vote, sma_strength, sma_label, sma_effective_weight)
 
     # Enhanced EMA cross with trend strength
     ema_s = safe_float(ind["ema_short"].iloc[-1])
@@ -316,7 +325,10 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     ema_l_out = float(ind["ema_long"].iloc[-1]) if ema_l is not None else np.nan
     # Convert direction to vote system
     ema_vote, ema_strength, ema_label = _direction_to_vote_system(ema_dir)
-    results["EMA"] = IndicatorResult(ema_dir, {"ema20": ema_s_out, "ema50": ema_l_out}, 0, ema_vote, ema_strength, ema_label)
+    # Set effective_weight: 0 if any critical NaN inputs, else normal weight
+    ema_has_nan = any(v is None for v in [ema_s, ema_l])
+    ema_effective_weight = 0.0 if ema_has_nan else WEIGHTS.get("EMA", 7.5)
+    results["EMA"] = IndicatorResult(ema_dir, {"ema20": ema_s_out, "ema50": ema_l_out}, 0, ema_vote, ema_strength, ema_label, ema_effective_weight)
 
     # Enhanced Bollinger + RSI condition with soft signals
     bb_low = safe_float(ind["bb_low"].iloc[-1])
@@ -352,7 +364,10 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     close_out = float(last["close"]) if close is not None else np.nan
     # Convert direction to vote system
     bb_vote, bb_strength, bb_label = _direction_to_vote_system(bb_dir)
-    results["BBANDS"] = IndicatorResult(bb_dir, {"bb_low": bb_low_out, "bb_high": bb_high_out, "close": close_out}, 0, bb_vote, bb_strength, bb_label)
+    # Set effective_weight: 0 if any critical NaN inputs, else normal weight
+    bb_has_nan = any(v is None for v in [bb_low, bb_high, close])
+    bb_effective_weight = 0.0 if bb_has_nan else WEIGHTS.get("BBANDS", 6.0)
+    results["BBANDS"] = IndicatorResult(bb_dir, {"bb_low": bb_low_out, "bb_high": bb_high_out, "close": close_out}, 0, bb_vote, bb_strength, bb_label, bb_effective_weight)
 
     # Enhanced Stochastic cross with zone-based signals
     k = safe_float(ind["stoch_k"].iloc[-1])
@@ -387,7 +402,10 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     d_out = float(ind["stoch_d"].iloc[-1]) if d is not None else np.nan
     # Convert direction to vote system
     st_vote, st_strength, st_label = _direction_to_vote_system(st_dir)
-    results["STOCH"] = IndicatorResult(st_dir, {"k": k_out, "d": d_out}, 0, st_vote, st_strength, st_label)
+    # Set effective_weight: 0 if any critical NaN inputs, else normal weight
+    st_has_nan = any(v is None for v in [k, d])
+    st_effective_weight = 0.0 if st_has_nan else WEIGHTS.get("STOCH", 7.0)
+    results["STOCH"] = IndicatorResult(st_dir, {"k": k_out, "d": d_out}, 0, st_vote, st_strength, st_label, st_effective_weight)
 
     # ATR filter (unchanged)
     atr = safe_float(ind["atr"].iloc[-1])
@@ -403,7 +421,10 @@ def evaluate_signals(df: pd.DataFrame, ind: Dict[str, pd.Series], params: Dict[s
     atr_out = float(ind["atr"].iloc[-1]) if atr is not None else np.nan
     # Convert direction to vote system
     atr_vote, atr_strength, atr_label = _direction_to_vote_system(atr_dir)
-    results["ATR"] = IndicatorResult(atr_dir, {"atr": atr_out, "atr_ratio": atr_ratio}, 0, atr_vote, atr_strength, atr_label)
+    # Set effective_weight: 0 if any critical NaN inputs, else normal weight
+    atr_has_nan = atr is None or close is None
+    atr_effective_weight = 0.0 if atr_has_nan else WEIGHTS.get("ATR_STABILITY", 5.0)
+    results["ATR"] = IndicatorResult(atr_dir, {"atr": atr_out, "atr_ratio": atr_ratio}, 0, atr_vote, atr_strength, atr_label, atr_effective_weight)
 
     return results
 
@@ -429,7 +450,8 @@ def _calculate_weighted_bias_score(results: Dict[str, IndicatorResult], weights:
             continue
             
         direction = results[indicator].direction
-        weight = weights.get(indicator, 0.0)
+        # Use effective_weight (0 if NaN inputs, else normal weight)
+        weight = getattr(results[indicator], 'effective_weight', weights.get(indicator, 0.0))
         
         if direction == "buy":
             buy_weight_sum += weight
@@ -477,18 +499,18 @@ def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict
     trend_buy_weight, trend_sell_weight = _calculate_weighted_bias_score(results, weights, trend_indicators)
     
     # Add ATR stability bonus if conditions are met
-    atr_weight = weights.get("ATR_STABILITY", weights.get("ATR", 0))
+    atr_weight = getattr(results["ATR"], 'effective_weight', weights.get("ATR_STABILITY", weights.get("ATR", 0)))
     if results["ATR"].direction == "buy":  # ATR filter passed
         trend_buy_weight += atr_weight
         trend_sell_weight += atr_weight
     
-    trend_total_weight = sum(weights.get(ind, 0) for ind in trend_indicators) + atr_weight
+    trend_total_weight = sum(getattr(results[ind], 'effective_weight', weights.get(ind, 0)) for ind in trend_indicators if ind in results) + atr_weight
     trend_dir, trend_strength = _determine_direction_from_bias(trend_buy_weight, trend_sell_weight, trend_total_weight)
     
     # Enhanced weighted bias logic for momentum strategy  
     momentum_indicators = ["RSI", "STOCH", "BBANDS"]
     momentum_buy_weight, momentum_sell_weight = _calculate_weighted_bias_score(results, weights, momentum_indicators)
-    momentum_total_weight = sum(weights.get(ind, 0) for ind in momentum_indicators)
+    momentum_total_weight = sum(getattr(results[ind], 'effective_weight', weights.get(ind, 0)) for ind in momentum_indicators if ind in results)
     momentum_dir, momentum_strength = _determine_direction_from_bias(momentum_buy_weight, momentum_sell_weight, momentum_total_weight)
     
     # Enhanced weighted bias logic for combined strategy
@@ -500,28 +522,28 @@ def compute_strategy_strength(results: Dict[str, IndicatorResult], weights: Dict
         combined_buy_weight += atr_weight
         combined_sell_weight += atr_weight
     
-    combined_total_weight = sum(weights.get(ind, 0) for ind in combined_indicators) + atr_weight
+    combined_total_weight = sum(getattr(results[ind], 'effective_weight', weights.get(ind, 0)) for ind in combined_indicators if ind in results) + atr_weight
     combined_dir, combined_strength = _determine_direction_from_bias(combined_buy_weight, combined_sell_weight, combined_total_weight)
     
     # Build detailed contribution tracking for backward compatibility
     trend_contrib = {
-        "SMA_EMA": weights.get("SMA_EMA", 0) if (results["SMA"].direction == trend_dir or results["EMA"].direction == trend_dir) else 0,
-        "MACD": weights.get("MACD", 0) if results["MACD"].direction == trend_dir else 0,
+        "SMA_EMA": (getattr(results["SMA"], 'effective_weight', weights.get("SMA", 0)) + getattr(results["EMA"], 'effective_weight', weights.get("EMA", 0))) if (results["SMA"].direction == trend_dir or results["EMA"].direction == trend_dir) else 0,
+        "MACD": getattr(results["MACD"], 'effective_weight', weights.get("MACD", 0)) if results["MACD"].direction == trend_dir else 0,
         "ATR_STABILITY": atr_weight if results["ATR"].direction == "buy" else 0,
     }
     
     momentum_contrib = {
-        "RSI": weights.get("RSI", 0) if results["RSI"].direction == momentum_dir else 0,
-        "STOCH": weights.get("STOCH", 0) if results["STOCH"].direction == momentum_dir else 0,
-        "BBANDS": weights.get("BBANDS", 0) if results["BBANDS"].direction == momentum_dir else 0,
+        "RSI": getattr(results["RSI"], 'effective_weight', weights.get("RSI", 0)) if results["RSI"].direction == momentum_dir else 0,
+        "STOCH": getattr(results["STOCH"], 'effective_weight', weights.get("STOCH", 0)) if results["STOCH"].direction == momentum_dir else 0,
+        "BBANDS": getattr(results["BBANDS"], 'effective_weight', weights.get("BBANDS", 0)) if results["BBANDS"].direction == momentum_dir else 0,
     }
     
     combined_contrib = {
-        "RSI": weights.get("RSI", 0) if results["RSI"].direction == combined_dir else 0,
-        "MACD": weights.get("MACD", 0) if results["MACD"].direction == combined_dir else 0,
-        "SMA_EMA": weights.get("SMA_EMA", 0) if (results["SMA"].direction == combined_dir or results["EMA"].direction == combined_dir) else 0,
-        "BBANDS": weights.get("BBANDS", 0) if results["BBANDS"].direction == combined_dir else 0,
-        "STOCH": weights.get("STOCH", 0) if results["STOCH"].direction == combined_dir else 0,
+        "RSI": getattr(results["RSI"], 'effective_weight', weights.get("RSI", 0)) if results["RSI"].direction == combined_dir else 0,
+        "MACD": getattr(results["MACD"], 'effective_weight', weights.get("MACD", 0)) if results["MACD"].direction == combined_dir else 0,
+        "SMA_EMA": (getattr(results["SMA"], 'effective_weight', weights.get("SMA", 0)) + getattr(results["EMA"], 'effective_weight', weights.get("EMA", 0))) if (results["SMA"].direction == combined_dir or results["EMA"].direction == combined_dir) else 0,
+        "BBANDS": getattr(results["BBANDS"], 'effective_weight', weights.get("BBANDS", 0)) if results["BBANDS"].direction == combined_dir else 0,
+        "STOCH": getattr(results["STOCH"], 'effective_weight', weights.get("STOCH", 0)) if results["STOCH"].direction == combined_dir else 0,
         "ATR_STABILITY": atr_weight if results["ATR"].direction == "buy" else 0,
     }
 
@@ -604,8 +626,8 @@ def compute_weighted_vote_aggregation(results: Dict[str, IndicatorResult], weigh
         if vote is None:
             continue
             
-        # Get weight for this indicator
-        indicator_weight = weights.get(indicator_name, 1.0)
+        # Get effective weight for this indicator (0 if NaN inputs, else normal weight)
+        indicator_weight = getattr(result, 'effective_weight', weights.get(indicator_name, 1.0))
         
         # Enhanced weighted contribution calculation per specification
         # Vote scale: Strong Buy (+1.0), Weak Buy (+0.5), Neutral (0.0), Weak Sell (-0.5), Strong Sell (-1.0)

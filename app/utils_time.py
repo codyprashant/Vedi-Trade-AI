@@ -13,18 +13,23 @@ logger = logging.getLogger(__name__)
 
 def as_utc_index(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Localize or convert DataFrame index to UTC timezone.
-    
-    Args:
-        df: DataFrame with datetime index
-        
-    Returns:
-        DataFrame with UTC-aware index
+    Converts DataFrame index to UTC timezone if it's a datetime index.
+    Returns the DataFrame unchanged if index is not datetime-based.
     """
     if df.empty:
         return df
     
+    # Check if index is datetime-based
+    if not isinstance(df.index, pd.DatetimeIndex):
+        logger.debug(f"Index is {type(df.index).__name__}, not DatetimeIndex - skipping timezone conversion")
+        return df
+    
     try:
+        # Check if index has timezone attribute (should always be true for DatetimeIndex)
+        if not hasattr(df.index, 'tz'):
+            logger.warning(f"DatetimeIndex missing 'tz' attribute - returning unchanged")
+            return df
+            
         if df.index.tz is None:
             # Assume naive timestamps are in UTC and localize them
             df.index = df.index.tz_localize('UTC')
@@ -41,28 +46,41 @@ def as_utc_index(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
 
-def last_closed(ts: Union[pd.Timestamp, str], freq: str) -> pd.Timestamp:
+def last_closed(ts: Union[pd.Timestamp, str, int], freq: str) -> pd.Timestamp:
     """
     Returns the floor of timestamp to the specified frequency in UTC.
     This represents the last closed bar for the given frequency.
     
     Args:
-        ts: Timestamp to floor
+        ts: Timestamp to floor (can be Timestamp, string, or integer index)
         freq: Frequency string (e.g., '15min', '1h', '4h', '1d')
         
     Returns:
         UTC timestamp representing the last closed bar
     """
     try:
-        # Convert to pandas Timestamp if string
+        # Handle different input types
         if isinstance(ts, str):
             ts = pd.to_datetime(ts, utc=True)
+        elif isinstance(ts, (int, float)):
+            # If we get an integer/float (like from RangeIndex), use current time
+            logger.warning(f"Received non-timestamp input ({type(ts).__name__}: {ts}) for last_closed, using current time")
+            ts = pd.Timestamp.utcnow()
         elif isinstance(ts, pd.Timestamp):
-            # Ensure UTC timezone
+            # Ensure UTC timezone - handle already timezone-aware timestamps
             if ts.tz is None:
                 ts = ts.tz_localize('UTC')
             elif ts.tz != pytz.UTC:
                 ts = ts.tz_convert('UTC')
+        else:
+            # For any other type, try to convert to timestamp
+            logger.warning(f"Unexpected input type {type(ts).__name__} for last_closed, attempting conversion")
+            ts = pd.to_datetime(ts, utc=True)
+        
+        # Ensure we have a valid timestamp with floor method
+        if not hasattr(ts, 'floor'):
+            logger.error(f"Converted timestamp {ts} (type: {type(ts)}) does not have floor method")
+            ts = pd.Timestamp.utcnow()
         
         # Floor to the specified frequency
         closed_ts = ts.floor(freq)
@@ -73,8 +91,13 @@ def last_closed(ts: Union[pd.Timestamp, str], freq: str) -> pd.Timestamp:
     except Exception as e:
         logger.error(f"Error calculating last closed bar: {e}")
         # Return current UTC time floored to frequency as fallback
-        now_utc = pd.Timestamp.utcnow().tz_localize('UTC')
-        return now_utc.floor(freq)
+        try:
+            now_utc = pd.Timestamp.utcnow()
+            return now_utc.floor(freq)
+        except Exception as fallback_e:
+            logger.error(f"Error in fallback calculation: {fallback_e}")
+            # Ultimate fallback - return current time without flooring
+            return pd.Timestamp.utcnow()
 
 
 def safe_float(value: Union[float, int, str, None], default: float = 0.0) -> float:
@@ -120,9 +143,15 @@ def normalize_timestamp(ts: Union[pd.Timestamp, str, None]) -> Optional[pd.Times
         if isinstance(ts, str):
             result = pd.to_datetime(ts, utc=True)
         elif isinstance(ts, pd.Timestamp):
+            # Handle timezone-aware and naive timestamps properly
             if ts.tz is None:
+                # Naive timestamp - localize to UTC
                 result = ts.tz_localize('UTC')
+            elif ts.tz == pytz.UTC:
+                # Already UTC - return as is
+                result = ts
             else:
+                # Different timezone - convert to UTC
                 result = ts.tz_convert('UTC')
         else:
             # Try to convert other types

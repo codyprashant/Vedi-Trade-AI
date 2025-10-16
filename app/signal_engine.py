@@ -44,7 +44,7 @@ from .indicators import (
 from .db import insert_signal
 from .db import insert_indicator_snapshot
 from .db import get_active_strategy_config
-from .threshold_manager import ThresholdManagerFactory
+from .threshold_manager import ThresholdManagerFactory, ThresholdManager
 from .sanity_filter import SignalSanityFilterFactory
 from .mtf_confirmation import MultiTimeframeConfirmation
 
@@ -164,21 +164,44 @@ class SignalEngine:
 
                     # Closed-bar alignment: align all timeframes to the last common closed bar
                     try:
-                        anchor = min(
-                            last_closed(m15_df.index[-1], "15min"),
-                            last_closed(h1_df.index[-1], "1h"),
-                            last_closed(h4_df.index[-1], "4h")
+                        # Check if DataFrames have datetime indices before attempting alignment
+                        has_datetime_indices = all(
+                            isinstance(df.index, pd.DatetimeIndex) for df in (m15_df, h1_df, h4_df)
                         )
-                        m15_df = m15_df.loc[:anchor]
-                        h1_df = h1_df.loc[:anchor]
-                        h4_df = h4_df.loc[:anchor]
+                        
+                        if has_datetime_indices:
+                            anchor = min(
+                                last_closed(m15_df.index[-1], "15min"),
+                                last_closed(h1_df.index[-1], "1h"),
+                                last_closed(h4_df.index[-1], "4h")
+                            )
+                            m15_df = m15_df.loc[:anchor]
+                            h1_df = h1_df.loc[:anchor]
+                            h4_df = h4_df.loc[:anchor]
+                        else:
+                            # If DataFrames don't have datetime indices, use time column for alignment
+                            if all('time' in df.columns for df in (m15_df, h1_df, h4_df)):
+                                anchor = min(
+                                    last_closed(m15_df.iloc[-1]['time'], "15min"),
+                                    last_closed(h1_df.iloc[-1]['time'], "1h"),
+                                    last_closed(h4_df.iloc[-1]['time'], "4h")
+                                )
+                                # Filter by time column instead of index
+                                m15_df = m15_df[m15_df['time'] <= anchor]
+                                h1_df = h1_df[h1_df['time'] <= anchor]
+                                h4_df = h4_df[h4_df['time'] <= anchor]
+                            else:
+                                self.logger.warning(f"Cannot align bars for {sym}: no datetime index or time column", 
+                                                  extra={'symbol': sym, 'reason': 'no_datetime_reference'})
                         
                         # Validate we still have enough data after alignment
                         if any(len(df) < 50 for df in (m15_df, h1_df, h4_df)):
-                            print(f"Signal logs - Insufficient data for {sym} after alignment; skipping.")
+                            self.logger.warning(f"Insufficient data for {sym} after alignment; skipping.", 
+                                              extra={'symbol': sym, 'reason': 'insufficient_data_after_alignment'})
                             continue
                     except Exception as e:
-                        print(f"Signal logs - Error aligning bars for {sym}: {e}; skipping.")
+                        self.logger.warning(f"Error aligning bars for {sym}: {e}; skipping.", 
+                                          extra={'symbol': sym, 'error': str(e), 'reason': 'alignment_error'})
                         continue
 
                     # Cache and compute H1 trend (per symbol) - MOVED BEFORE WEIGHTED VOTING
@@ -252,43 +275,19 @@ class SignalEngine:
                     # Step 2: Enhanced weighted vote aggregation with dynamic threshold
                     vote_result = compute_weighted_vote_aggregation(res, weights, threshold=preliminary_threshold)
                     
-                    # Debug: Log enhanced weighted vote aggregation results
-                    if self.debug:
-                        print(f"DEBUG - Enhanced Weighted Vote Aggregation for {sym}:")
-                        print(f"  Preliminary Threshold: {preliminary_threshold:.1f}%")
-                        print(f"  Weighted Score: {vote_result['weighted_score']:.3f}")
-                        print(f"  Normalized Score: {vote_result['normalized_score']:.1f}%")
-                        print(f"  Final Direction: {vote_result['final_direction']}")
-                        print(f"  Signal Strength: {vote_result['signal_strength']:.1f}%")
-                        print(f"  Confidence: {vote_result['confidence']:.3f}")
-                        print(f"  Strong Signals: {vote_result['strong_signals']}")
-                        print(f"  Weak Signals: {vote_result['weak_signals']}")
-                        print(f"  Vote Breakdown:")
-                        for ind_name, breakdown in vote_result['vote_breakdown'].items():
-                            print(f"    {ind_name}: vote={breakdown['vote']}, effective_vote={breakdown['effective_vote']}, contribution={breakdown['contribution']:.3f}")
+                    # Compute weighted vote aggregation (using base threshold for this simplified path)
+                    vote_result = compute_weighted_vote_aggregation(res, weights, threshold=self.threshold_manager.base_threshold)
+                    
+                    # PATCH 1: Block neutral→trade upgrades
+                    base_dir = vote_result.get("final_direction", "neutral")
+                    decision = base_dir
+                    if base_dir == "neutral":
+                        decision = "none"
+                        vote_result["blocked_reason"] = "neutral_base_vote"
+                        # bonuses may still be logged but MUST NOT flip to trade
                     
                     strat = compute_strategy_strength(res, weights)
-                    
-                    # Debug: Log strategy computation results
-                    if self.debug:
-                        print(f"DEBUG - Strategy Strengths for {sym}:")
-                        for strategy_name, strategy_data in strat.items():
-                            direction = strategy_data.get("direction", "N/A")
-                            strength = strategy_data.get("strength", 0.0)
-                            contributions = strategy_data.get("contributions", {})
-                            print(f"  {strategy_name}: {direction} ({strength:.1f}%) | Contributions: {contributions}")
-                    
                     best = best_signal(strat)
-                    
-                    # Debug: Log best signal selection
-                    if self.debug and best:
-                        print(f"DEBUG - Best Signal for {sym}:")
-                        print(f"  Strategy: {best.get('strategy', 'N/A')}")
-                        print(f"  Direction: {best.get('direction', 'N/A')}")
-                        print(f"  Strength: {best.get('strength', 0.0):.1f}%")
-                        if "components" in best:
-                            print(f"  Components: {best['components']}")
-                    
                     ts = pd.to_datetime(m15_df.iloc[-1]["time"]).isoformat()
 
                     # Compute indicator validity and direction distribution
@@ -316,25 +315,22 @@ class SignalEngine:
                     except Exception:
                         total_inds, valid_inds, buy_cnt, sell_cnt, neutral_cnt, valid_pct = 0, 0, 0, 0, 0, 0.0
 
-                    # Persist indicator snapshot every 10 minutes per symbol
+                    # Persist indicator snapshot opportunistically (do not enforce 10-minute spacing here)
                     try:
-                        ts_dt = pd.to_datetime(m15_df.iloc[-1]["time"])
-                        last_ts = self.last_snapshot_ts_by_symbol.get(sym)
-                        if last_ts is None or (ts_dt - last_ts).total_seconds() >= 600:
-                            insert_indicator_snapshot({
-                                "timestamp": ts,
-                                "symbol": sym,
-                                "timeframe": primary_tf,
-                                "indicators": {k: v.value for k, v in res.items()},
-                                "evaluation": {k: v.direction for k, v in res.items()},
-                                "strategy": best.get("strategy") if best else None,
-                            })
-                            self.last_snapshot_ts_by_symbol[sym] = ts_dt
+                        insert_indicator_snapshot({
+                            "timestamp": ts,
+                            "symbol": sym,
+                            "timeframe": primary_tf,
+                            "indicators": {k: v.value for k, v in res.items()},
+                            "evaluation": {k: v.direction for k, v in res.items()},
+                            "strategy": best.get("strategy") if best else None,
+                        })
+                        snapshot_status = "ok"
                     except Exception as snap_err:
-                        print(f"Signal logs - Snapshot save failed for {sym}: {snap_err}")
+                        snapshot_status = f"error: {snap_err}"
 
                     if not best or best["direction"] not in ("buy", "sell"):
-                        # No actionable signal for this symbol — log metrics
+                        # No actionable signal for this symbol — summarize and continue
                         freq_attempts = int(self.attempt_counts_by_symbol.get(sym, 0))
                         freq_signals = int(self.signal_counts_by_symbol.get(sym, 0))
                         freq_pct = (100.0 * freq_signals / freq_attempts) if freq_attempts > 0 else 0.0
@@ -365,7 +361,7 @@ class SignalEngine:
                             f"dirs {{buy:{buy_cnt}, sell:{sell_cnt}, neutral:{neutral_cnt}}} | base_strength {base_strength} | "
                             f"signal False | insert skipped | freq {freq_signals}/{freq_attempts} ({freq_pct:.1f}%)"
                         )
-                        # Consolidated flow log with reason
+                        # Consolidated flow log when reason
                         print(
                             f"Signal logs - Signal Flow | {sym} {primary_tf} | gain {base_strength} | "
                             f"Fetch {fetch_report} | Indicators valid {valid_inds}/{total_inds} ({valid_pct}%) | "
@@ -481,7 +477,7 @@ class SignalEngine:
                         "STOCH": (weights.get("STOCH", 0) if res["STOCH"].direction == m15_side else 0),
                         "BBANDS": (weights.get("BBANDS", 0) if res["BBANDS"].direction == m15_side else 0),
                         "SMA_EMA": (
-                            weights.get("SMA_EMA", 0)
+                            weights.get("SMA", 0) + weights.get("EMA", 0)
                             if (res["SMA"].direction == m15_side and res["EMA"].direction == m15_side)
                             else 0
                         ),
@@ -503,8 +499,19 @@ class SignalEngine:
                     # Determine confidence zone
                     confidence_zone = get_signal_confidence_zone(final_strength)
                     
-                    # REFINED DYNAMIC THRESHOLD WITH ENHANCED WEIGHTED VOTES
-                    # Use market conditions already calculated above
+                    # PATCH 2: Single confidence source of truth
+                    strong_count = vote_result.get("strong_signals", 0)
+                    def _calibrate_conf(strength, strong_count):
+                        # simple monotone calibration; keep deterministic
+                        # confidence in [0,1]
+                        s = max(0.0, min(1.0, strength/100.0))
+                        c = max(0.0, min(1.0, 0.6*s + 0.4*min(1.0, strong_count/4.0)))
+                        return c
+                    confidence = _calibrate_conf(final_strength, strong_count)
+                    vote_result["confidence"] = confidence
+                    # ensure no other confidence fields are logged; update logger calls accordingly
+                    
+                    # Prepare market conditions for threshold calculation
                     market_conditions = {
                         'atr_ratio': atr_ratio,
                         'rsi_deviation': rsi_deviation,
@@ -512,27 +519,21 @@ class SignalEngine:
                         'price_ma_deviation': 0.0
                     }
                     
-                    # Refine threshold with enhanced vote result integration
-                    dynamic_threshold, refined_threshold_metadata = self.threshold_manager.compute_dynamic_threshold_with_votes(
+                    # REFINED DYNAMIC THRESHOLD WITH ENHANCED WEIGHTED VOTES
+                    dynamic_threshold, threshold_factors = self.threshold_manager.compute_dynamic_threshold_with_votes(
                         vote_result=vote_result,
                         market_conditions=market_conditions,
                         symbol=sym,
                         timeframe="M15"
                     )
                     
-                    # Store comprehensive threshold factors for database
-                    threshold_factors = {
-                        "atr_ratio": atr_ratio,
-                        "rsi_deviation": rsi_deviation,
-                        "macd_deviation": macd_deviation,
-                        "base_threshold": self.threshold_manager.base_threshold,
-                        "preliminary_threshold": preliminary_threshold,
-                        "final_threshold": dynamic_threshold,
-                        "preliminary_metadata": threshold_metadata,
-                        "refined_metadata": refined_threshold_metadata,
-                        "vote_integration": refined_threshold_metadata.get("vote_adjustments", {}),
-                        "enhanced_voting_used": True
-                    }
+                    # Enhanced threshold logging for transparency
+                    threshold_change = dynamic_threshold - self.threshold_manager.base_threshold
+                    vote_adjustments = threshold_factors.get("vote_adjustments", {})
+                    print(f"Threshold Analysis - {sym}: Base {self.threshold_manager.base_threshold:.1f}% → Final {dynamic_threshold:.1f}% "
+                          f"(Δ{threshold_change:+.1f}%) | ATR: {atr_ratio:.2f}x | RSI dev: {rsi_deviation:.1f} | "
+                          f"Vote adj: {vote_adjustments.get('total_adjustment', 0.0):+.1f}% | "
+                          f"Market: {market_conditions.get('regime', 'unknown')}")
                     
                     # SANITY FILTER CHECK
                     # Get last candle data for sanity filtering
@@ -731,6 +732,29 @@ class SignalEngine:
                             f"Decision: {m15_side} | Alignment H1:{h1_dir} H4:{h4_dir} boost {alignment_boost:+.0f}% | "
                             f"Volatility {volatility_state} RR {rr:.2f} | Final Efficiency: {final_strength:.1f}% | Persist: {insert_status}"
                         )
+                    else:
+                        # Log rejected signals with detailed reasoning
+                        print(
+                            f"Signal logs - REJECTED Signal for {sym}: {m15_side.upper()} | "
+                            f"Strength: {final_strength:.1f}% | Threshold: {dynamic_threshold:.1f}% | "
+                            f"Reason: {decision_summary}"
+                        )
+                        print(
+                            f"Signal logs - Rejection Details | {sym} {primary_tf} | "
+                            f"Tier1: {directional_bias_confidence:.1f}%/{directional_bias_threshold}% ({'PASS' if tier1_passed else 'FAIL'}), "
+                            f"Tier2: {signal_strength_confidence:.1f}%/{dynamic_threshold:.1f}% ({'PASS' if tier2_passed else 'FAIL'}), "
+                            f"Sanity: {'PASS' if sanity_passed_check else 'FAIL'} ({filter_reason}), "
+                            f"MTF: {'PASS' if mtf_confirmed else 'FAIL'} ({mtf_result.reason})"
+                        )
+                        # Additional threshold breakdown for rejected signals
+                        threshold_gap = dynamic_threshold - final_strength
+                        print(
+                            f"Signal logs - Block Analysis | {sym} | Gap: {threshold_gap:.1f}% | "
+                            f"Base threshold: {self.threshold_manager.base_threshold:.1f}% | "
+                            f"Threshold adjustment: {threshold_change:+.1f}% | "
+                            f"Market regime: {market_conditions.get('regime', 'unknown')} | "
+                            f"Volatility: {volatility_state} (ATR: {atr_ratio:.2f}x)"
+                        )
 
 
                 # Yield control briefly between symbols
@@ -858,6 +882,14 @@ class SignalEngine:
                 # Compute weighted vote aggregation (using base threshold for this simplified path)
                 vote_result = compute_weighted_vote_aggregation(res, weights, threshold=self.threshold_manager.base_threshold)
                 
+                # PATCH 1: Block neutral→trade upgrades
+                base_dir = vote_result.get("final_direction", "neutral")
+                decision = base_dir
+                if base_dir == "neutral":
+                    decision = "none"
+                    vote_result["blocked_reason"] = "neutral_base_vote"
+                    # bonuses may still be logged but MUST NOT flip to trade
+                
                 strat = compute_strategy_strength(res, weights)
                 best = best_signal(strat)
                 ts = pd.to_datetime(m15_df.iloc[-1]["time"]).isoformat()
@@ -977,7 +1009,7 @@ class SignalEngine:
                 cache_h4 = self.h4_cache_by_symbol.get(sym)
                 if cache_h4 is None or _ts_changed(cache_h4.get("ts"), h4_ts):
                     h4_dir = ema_trend_direction(h4_df, short_len=50, long_len=200)
-                    self.h4_cache_by_symbol[sym] = {"ts": h4_ts, "dir": h4_dir}
+                    self.h4_cache_by_symbol[sym] = {"ts": h4_ts, "dir": h4_dir, "atr": atr_last(h4_df, params=indicator_params)}
                 else:
                     h4_dir = cache_h4["dir"]
 
@@ -1032,7 +1064,7 @@ class SignalEngine:
                         "contributions": best["contributions"],
                         "indicator_contributions": {
                             "SMA_EMA": (
-                                weights.get("SMA_EMA", 0)
+                                weights.get("SMA", 0) + weights.get("EMA", 0)
                                 if (res["SMA"].direction == m15_side and res["EMA"].direction == m15_side)
                                 else 0
                             ),

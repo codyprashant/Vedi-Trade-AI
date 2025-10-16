@@ -38,14 +38,14 @@ INDICATOR_PARAMS = {
 # Indicator weights (percent totals) — aligned to new spec
 # Base indicators on M15
 WEIGHTS = {
-    "RSI": 15,
     "MACD": 20,
-    "SMA_EMA": 15,  # combined weight for trend crosses (EMA/SMA)
-    "BBANDS": 10,
+    "RSI": 15,
     "STOCH": 10,
-    # Additional categories
+    "BBANDS": 5,
+    "SMA": 7.5,
+    "EMA": 7.5,                 # sums to SMA_EMA 15
+    "ATR_STABILITY": 10,
     "MTF": 10,             # H1 alignment credit
-    "ATR_STABILITY": 10,   # Normal volatility environment
     "PRICE_ACTION": 10,    # Recent 5-candle momentum pattern
 }
 
@@ -88,7 +88,7 @@ PRICE_ACTION_BONUS = 5      # Bonus when price action aligns with final directio
 
 # Logging Configuration
 DEBUG_WEBSOCKET = False  # Set to True to enable detailed WebSocket debug logs
-DEBUG_SIGNALS = False    # Set to True to enable detailed signal processing logs
+DEBUG_SIGNALS = True    # Set to True to enable detailed signal processing logs
 
 # Adaptive Threshold Manager Configuration
 THRESHOLD_MANAGER_CONFIG = {

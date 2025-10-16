@@ -301,13 +301,21 @@ class SignalSanityFilter:
                 }
             }
             
-            # Log validation result
+            # Enhanced logging for validation result
             if is_valid:
-                logger.debug(f"Signal PASSED sanity filter for {symbol}: "
+                logger.info(f"Sanity Filter PASSED for {symbol}: "
                            f"body_ratio={body_ratio:.3f}, atr_ratio={atr_ratio:.6f}, "
-                           f"confidence={direction_confidence:.1f}%")
+                           f"confidence={direction_confidence:.1f}%, strength={signal_strength:.1f}%")
+                logger.debug(f"Sanity Filter Details for {symbol}: "
+                           f"volatility_check={validation_results[0] if len(validation_results) > 0 else 'N/A'}, "
+                           f"candle_check={validation_results[1] if len(validation_results) > 1 else 'N/A'}, "
+                           f"confidence_check={validation_results[2] if len(validation_results) > 2 else 'N/A'}")
             else:
-                logger.info(f"Signal REJECTED for {symbol}: {final_reason}")
+                logger.warning(f"Sanity Filter REJECTED for {symbol}: {final_reason}")
+                logger.debug(f"Sanity Filter Rejection Details for {symbol}: "
+                           f"body_ratio={body_ratio:.3f}, atr_ratio={atr_ratio:.6f}, "
+                           f"confidence={direction_confidence:.1f}%, strength={signal_strength:.1f}%, "
+                           f"failed_checks={len([r for r in validation_results if not r])}/{len(validation_results)}")
             
             return is_valid, final_reason, metadata
             
