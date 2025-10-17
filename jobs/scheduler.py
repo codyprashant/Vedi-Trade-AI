@@ -4,6 +4,7 @@ Job Scheduler for Trading System
 This module handles scheduling of automated tasks including:
 - Daily signal performance evaluation at 5:00 AM
 - Re-evaluation of open signals
+- Structured signal trace retention cleanup
 - System maintenance tasks
 """
 
@@ -13,6 +14,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from signal_performance_evaluator import SignalPerformanceEvaluator
+from app.db_trace import cleanup_signal_traces
 
 # Configure logging
 logging.basicConfig(
@@ -56,25 +58,38 @@ class TradingSystemScheduler:
         """Weekly cleanup and maintenance job."""
         try:
             logger.info("Starting weekly cleanup job")
-            
+
             # Add any weekly maintenance tasks here
             # For example: cleanup old logs, optimize database, etc.
-            
+
             logger.info("Weekly cleanup completed")
-            
+
         except Exception as e:
             logger.error(f"Weekly cleanup job failed: {e}", exc_info=True)
+
+    def scheduled_trace_cleanup(self):
+        """Daily cleanup for signal trace retention."""
+        try:
+            logger.info("Starting signal trace cleanup job")
+            cleanup_signal_traces(days=7)
+            logger.info("Signal trace cleanup job completed")
+        except Exception as e:
+            logger.error(f"Signal trace cleanup job failed: {e}", exc_info=True)
     
     def setup_schedule(self):
         """Set up the job schedule."""
         # Daily signal evaluation at 5:00 AM
         schedule.every().day.at("05:00").do(self.daily_signal_evaluation_job)
         
+        # Daily signal trace cleanup at 3:00 AM
+        schedule.every().day.at("03:00").do(self.scheduled_trace_cleanup)
+
         # Weekly cleanup on Sunday at 2:00 AM
         schedule.every().sunday.at("02:00").do(self.weekly_cleanup_job)
         
         logger.info("Job schedule configured:")
         logger.info("- Daily signal evaluation: 05:00 AM")
+        logger.info("- Signal trace cleanup: Daily 03:00 AM")
         logger.info("- Weekly cleanup: Sunday 02:00 AM")
     
     def run_scheduler(self):

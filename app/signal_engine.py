@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import asdict
 from typing import Dict, Any, Optional, List
 
 import pandas as pd
@@ -46,6 +47,7 @@ from .indicators import (
 from .db import insert_signal
 from .db import insert_indicator_snapshot
 from .db import get_active_strategy_config
+from app.db_trace import insert_signal_trace
 from .threshold_manager import ThresholdManagerFactory, ThresholdManager
 from .sanity_filter import SignalSanityFilterFactory, apply_sanity_overrides, sanity_check
 from .mtf_confirmation import MultiTimeframeConfirmation
@@ -1333,6 +1335,77 @@ class SignalEngine:
                 "market_regime": regime,
                 "indicator_contributions": indicator_contributions,
             })
+
+            def _to_jsonable(value: Any):
+                if isinstance(value, (int, float)):
+                    if math.isnan(float(value)) or math.isinf(float(value)):
+                        return safe_log_value(value)
+                    return float(value)
+                if isinstance(value, (str, bool)) or value is None:
+                    return value
+                if isinstance(value, dict):
+                    return {k: _to_jsonable(v) for k, v in value.items()}
+                if isinstance(value, (list, tuple, set)):
+                    return [_to_jsonable(v) for v in value]
+                return safe_log_value(value)
+
+            indicator_results = {
+                name: {
+                    "direction": getattr(indicator_result, "direction", None),
+                    "vote": getattr(indicator_result, "vote", None),
+                    "strength": _to_jsonable(getattr(indicator_result, "strength", None)),
+                    "label": getattr(indicator_result, "label", None),
+                    "value": _to_jsonable(getattr(indicator_result, "value", None)),
+                }
+                for name, indicator_result in res.items()
+            }
+
+            weight_vector = {k: _to_jsonable(v) for k, v in (weights or {}).items()}
+            last_bar_time = timestamp.isoformat() if timestamp else None
+            body_ratio = _to_jsonable(
+                abs(last_candle["close"] - last_candle["open"]) / (last_candle["high"] - last_candle["low"] + 1e-9)
+            )
+            wick_ratio = _to_jsonable(
+                (last_candle["high"] - last_candle["low"]) / (abs(last_candle["close"] - last_candle["open"]) + 1e-9)
+            )
+            trace_data = {
+                "symbol": sym,
+                "timeframe": primary_tf,
+                "last_bar": last_bar_time,
+                "indicators": indicator_results,
+                "weights": weight_vector,
+                "thresholds": {
+                    "dynamic": _to_jsonable(threshold_factors.get("dynamic_threshold", dynamic_threshold)),
+                    "ewma": _to_jsonable(threshold_factors.get("auto_threshold")),
+                    "final": _to_jsonable(threshold_factors.get("final_threshold", dynamic_threshold)),
+                },
+                "sanity": {
+                    "passed": bool(sanity_passed),
+                    "reasons": sanity_reasons,
+                    "atr": _to_jsonable(h1_atr_last),
+                    "body_ratio": body_ratio,
+                    "wick_ratio": wick_ratio,
+                    "confidence": _to_jsonable(confidence_fraction),
+                },
+                "mtf": _to_jsonable(asdict(mtf_result)) if mtf_result else {},
+                "confidence_final": _to_jsonable(confidence_value),
+                "decision": decision,
+                "final_decision": decision,
+                "runtime_ms": round((time.perf_counter() - start_ts) * 1000, 2),
+            }
+
+            self.logger.info({"event": "symbol_trace", **trace_data})
+            try:
+                insert_signal_trace(sym, primary_tf, trace_data)
+            except Exception as trace_err:
+                self.logger.error(
+                    {
+                        "event": "symbol_trace_error",
+                        "symbol": sym,
+                        "timeframe": primary_tf,
+                        "error": str(trace_err),
+                    }
+                )
 
             return result
         finally:
