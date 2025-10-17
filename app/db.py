@@ -65,6 +65,11 @@ def _get_conn():
         raise RuntimeError(f"Database connection error: {e}")
 
 
+def get_connection():
+    """Public accessor for obtaining a raw database connection."""
+    return _get_conn()
+
+
 def _put_conn(conn):
     """Return a database connection to the pool with error handling."""
     if conn is None:
