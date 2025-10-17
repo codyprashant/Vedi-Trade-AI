@@ -34,48 +34,48 @@ This document provides a **developer + operations** overview of the Vedi-Trade-A
 ```mermaid
 flowchart LR
   subgraph Client["Frontend (Futuristic AI Dashboard)"]
-    A1[Symbol Selector]
-    A2[Real-time Dashboard]
-    A3[Signals Explorer]
-    A4[Manual Trigger]
-    A5[Backtesting UI]
-    A6[Strategy Config]
-    A7[Trace Viewer]
+    A1["Symbol Selector"]
+    A2["Real-time Dashboard"]
+    A3["Signals Explorer"]
+    A4["Manual Trigger"]
+    A5["Backtesting UI"]
+    A6["Strategy Config"]
+    A7["Trace Viewer"]
   end
 
   subgraph API["FastAPI Backend (yahoo_server.py)"]
-    B1[/GET /history/]
-    B2[/GET /indicators/latest/]
-    B3[/GET /indicators/live/]
-    B4[/GET /signals/recent/]
-    B5[/GET /signals/latest/]
-    B6[/POST /api/signals/compute/]
-    B7[/POST /api/backtest/run/]
-    B8[/GET /api/backtest/roi/]
-    B9[/GET /api/backtest/{id}/results/]
-    B10[/GET /api/backtest/list/]
-    B11[/GET /api/config/strategies/]
-    B12[/GET /api/config/strategies/{id}/]
-    B13[/POST /api/config/strategies/{id}/activate/]
-    B14[/"WS /ws/prices"/]
-    B15[/GET /api/trace/{signal_id}/]
-    B16[/GET /api/indicators/contributions/{signal_id}/]
+    B1["GET /history"]
+    B2["GET /indicators/latest"]
+    B3["GET /indicators/live"]
+    B4["GET /signals/recent"]
+    B5["GET /signals/latest"]
+    B6["POST /api/signals/compute"]
+    B7["POST /api/backtest/run"]
+    B8["GET /api/backtest/roi"]
+    B9["GET /api/backtest/{id}/results"]
+    B10["GET /api/backtest/list"]
+    B11["GET /api/config/strategies"]
+    B12["GET /api/config/strategies/{id}"]
+    B13["POST /api/config/strategies/{id}/activate"]
+    B14["WS /ws/prices"]
+    B15["GET /api/trace/{signal_id}"]
+    B16["GET /api/indicators/contributions/{signal_id}"]
   end
 
   subgraph Engine["Core Logic"]
-    C1[SignalEngine]
-    C2[Indicators (pandas-ta)]
-    C3[MTF Confirmation]
-    C4[Threshold Manager]
-    C5[Analytics: A/B, TS, Learner, Rollback]
+    C1["Signal Engine"]
+    C2["Indicators (pandas-ta)"]
+    C3["MTF Confirmation"]
+    C4["Threshold Manager"]
+    C5["Analytics: A/B, TS, Learner, Rollback"]
   end
 
   subgraph Data["Data Sources & Storage"]
-    D1[(PostgreSQL)]
-    D2[[Yahoo Finance]]
+    D1[("PostgreSQL")]
+    D2[["Yahoo Finance"]]
   end
 
-  A2 -- subscribe --> B14
+  A2 --> B14
   A1 --> B2
   A1 --> B5
   A3 --> B4
@@ -90,14 +90,14 @@ flowchart LR
   A7 --> B15
   A7 --> B16
 
-  B1 ==> C2
-  B2 ==> C2
-  B3 ==> C2
-  B6 ==> C1
-  B7 ==> C1
-  B5 ==> C1
+  B1 --> C2
+  B2 --> C2
+  B3 --> C2
+  B6 --> C1
+  B7 --> C1
+  B5 --> C1
 
-  C1 <==> C2
+  C1 <--> C2
   C1 --> C3
   C1 --> C4
   C1 --> C5
@@ -106,6 +106,7 @@ flowchart LR
   C2 --> D1
   B14 --> C1
   C2 --> D2
+
 ```
 
 ---
