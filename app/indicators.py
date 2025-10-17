@@ -823,7 +823,31 @@ def price_action_direction(df: pd.DataFrame, lookback: int = 5, params: Dict[str
     Fallback: majority-of-closes with EMA20 filter over `lookback` candles
     """
     p = params or INDICATOR_PARAMS
-    if len(df) < max(lookback, p["EMA"]["short"]):
+    # Resolve short EMA length robustly from params
+    ema_cfg = p.get("EMA", {}) if isinstance(p, dict) else {}
+    default_short = 20
+    short_len = default_short
+    try:
+        if isinstance(ema_cfg, dict):
+            if "short" in ema_cfg and isinstance(ema_cfg["short"], (int, float)):
+                short_len = int(ema_cfg["short"])
+            else:
+                periods = ema_cfg.get("periods", [])
+                if isinstance(periods, (list, tuple)) and len(periods) > 0:
+                    # Prefer common short lengths if present, else smallest period
+                    if 20 in periods:
+                        short_len = 20
+                    elif 9 in periods:
+                        short_len = 9
+                    else:
+                        try:
+                            short_len = int(sorted(periods)[0])
+                        except Exception:
+                            short_len = default_short
+    except Exception:
+        short_len = default_short
+
+    if len(df) < max(lookback, short_len):
         return "neutral"
 
     # Prepare last candles
@@ -836,7 +860,7 @@ def price_action_direction(df: pd.DataFrame, lookback: int = 5, params: Dict[str
     lower_wick_last = min(open_last, close_last) - low_last
     upper_wick_last = high_last - max(open_last, close_last)
 
-    ema20_series = _safe_ema_series(df["close"], length=p["EMA"]["short"])  # EMA short
+    ema20_series = _safe_ema_series(df["close"], length=short_len)  # EMA short
     ema20_last = float(ema20_series.iloc[-1]) if len(ema20_series) else float("nan")
     ema20_prev3 = float(ema20_series.iloc[-3]) if len(ema20_series) >= 3 else ema20_last
 

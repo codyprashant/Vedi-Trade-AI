@@ -13,7 +13,6 @@ from psycopg2 import sql as psql
 from .config import (
     INDICATOR_PARAMS,
     WEIGHTS,
-    SIGNAL_THRESHOLD,
     PRIMARY_TIMEFRAME,
     CONFIRMATION_TIMEFRAME,
     TREND_TIMEFRAME,
@@ -31,12 +30,12 @@ def get_pool() -> SimpleConnectionPool:
     # Load env variables from .env (if present)
     load_dotenv()
 
-    user = os.getenv("user") or os.getenv("DB_USER")
-    password = os.getenv("password") or os.getenv("DB_PASSWORD")
-    host = os.getenv("host") or os.getenv("DB_HOST")
-    port = os.getenv("port") or os.getenv("DB_PORT")
-    dbname = os.getenv("dbname") or os.getenv("DB_NAME")
-
+    user = os.getenv("DB_USER")
+    password =  os.getenv("DB_PASSWORD")
+    host =  os.getenv("DB_HOST")
+    port =  os.getenv("DB_PORT")
+    dbname =  os.getenv("DB_NAME")
+    # print(f"Database CReds - {user} to {password} to {host} to {port} to {dbname}")
     if not all([user, password, host, port, dbname]):
         raise RuntimeError("Database credentials missing. Ensure .env has user, password, host, port, dbname")
 
