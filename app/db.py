@@ -65,6 +65,11 @@ def _get_conn():
         raise RuntimeError(f"Database connection error: {e}")
 
 
+def get_connection():
+    """Public accessor for obtaining a raw database connection."""
+    return _get_conn()
+
+
 def _put_conn(conn):
     """Return a database connection to the pool with error handling."""
     if conn is None:
@@ -703,6 +708,29 @@ def fetch_recent_signals(limit: int = 20) -> List[Dict[str, Any]]:
                 )
                 rows = cur.fetchall()
                 return [dict(row) for row in rows]
+    finally:
+        _put_conn(conn)
+
+
+def fetch_indicator_contributions(signal_id: int) -> Optional[Any]:
+    """Fetch indicator contributions JSON for a given signal id."""
+
+    conn = _get_conn()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT indicator_contributions
+                    FROM public.signals
+                    WHERE id = %s
+                    """,
+                    (signal_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return row.get("indicator_contributions")
     finally:
         _put_conn(conn)
 
