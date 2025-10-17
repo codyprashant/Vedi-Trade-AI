@@ -43,7 +43,9 @@ from .db import (
     update_strategy_threshold,
     set_active_strategy,
     check_database_health,
+    fetch_indicator_contributions,
 )
+from .db_trace import ensure_signal_trace_table, fetch_signal_traces
 from .config import (
     ALLOWED_SYMBOLS,
     INDICATOR_PARAMS,
@@ -913,6 +915,10 @@ async def init_env_and_start_signal_engine():
         ensure_indicator_snapshots_table()
     except Exception as e:
         print(f"Postgres init failed (indicator_snapshots): {e}")
+    try:
+        ensure_signal_trace_table()
+    except Exception as e:
+        print(f"Postgres init failed (signal_traces): {e}")
 
     # Start signal engine (fetches Yahoo data)
     global signal_task, signal_engine_instance
@@ -997,6 +1003,35 @@ async def indicators_live(symbol: str, timeframe: str = "15m", count: int = 200)
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compute live indicators: {e}")
+
+
+@app.get("/api/trace/{signal_id}")
+async def get_trace(signal_id: int):
+    """Return stored trace log rows for a specific signal."""
+
+    try:
+        traces = fetch_signal_traces(signal_id)
+        return {"signal_id": signal_id, "traces": traces}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trace logs: {e}")
+
+
+@app.get("/api/indicators/contributions/{signal_id}")
+async def get_indicator_contributions(signal_id: int):
+    """Return the indicator contribution payload stored with a signal."""
+
+    try:
+        contributions = fetch_indicator_contributions(signal_id)
+        if contributions is None:
+            raise HTTPException(status_code=404, detail=f"Signal {signal_id} not found")
+        return {
+            "signal_id": signal_id,
+            "indicator_contributions": contributions,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch indicator contributions: {e}")
 
 
 # --- Strategy Configuration API Endpoints ---

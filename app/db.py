@@ -712,6 +712,29 @@ def fetch_recent_signals(limit: int = 20) -> List[Dict[str, Any]]:
         _put_conn(conn)
 
 
+def fetch_indicator_contributions(signal_id: int) -> Optional[Any]:
+    """Fetch indicator contributions JSON for a given signal id."""
+
+    conn = _get_conn()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT indicator_contributions
+                    FROM public.signals
+                    WHERE id = %s
+                    """,
+                    (signal_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return row.get("indicator_contributions")
+    finally:
+        _put_conn(conn)
+
+
 def ensure_new_backtesting_tables() -> None:
     """Create the new unified backtesting tables for the enhanced engine."""
     conn = _get_conn()
