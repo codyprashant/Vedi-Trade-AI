@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import math
+import os
 import time
-from dataclasses import asdict
-from typing import Dict, Any, Optional, List
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import pandas as pd
-import math
 
 from .config import (
     DEFAULT_SYMBOL,
@@ -29,6 +32,8 @@ from .config import (
     AB_ENABLED,
     AB_BUCKET,
     TS_ENABLED,
+    INDICATOR_PARAMS,
+    SIGNAL_THRESHOLD,
 )
 from .logging_config import get_logger, log_signal_event, log_performance, safe_log_value
 from .utils_time import as_utc_index, last_closed, safe_float, compute_bounded_alignment_boost
@@ -53,6 +58,402 @@ from .sanity_filter import SignalSanityFilterFactory, apply_sanity_overrides, sa
 from .mtf_confirmation import MultiTimeframeConfirmation
 from .analytics.ab_regime import RegimeAB
 from .analytics.thompson import BetaBandit
+
+
+TRACE_ENABLED = os.getenv("TRACE_ENABLED", "0") == "1"
+
+PIPELINE_LOGGER = get_logger("signal_pipeline")
+
+try:
+    from .data_fetchers.yahoo_fetcher import fetch_history as _default_history_fetcher
+except Exception:  # pragma: no cover - optional dependency in tests
+    _default_history_fetcher = None
+
+
+@dataclass
+class SignalParams:
+    """Configuration bundle for :func:`compute_signal`."""
+
+    primary_tf: str = DEFAULT_TIMEFRAME
+    trend_tf: str = TREND_TIMEFRAME
+    guard_tf: Optional[str] = None
+    history_count: int = DEFAULT_HISTORY_COUNT
+    indicator_params: Dict[str, Any] = field(
+        default_factory=lambda: copy.deepcopy(INDICATOR_PARAMS)
+    )
+    weights: Dict[str, float] = field(default_factory=lambda: copy.deepcopy(WEIGHTS))
+    threshold: float = SIGNAL_THRESHOLD
+    strategy: str = "signal_pipeline"
+    history_fetcher: Optional[Callable[[str, str, int], pd.DataFrame]] = None
+    mtf_confirmation: Optional[MultiTimeframeConfirmation] = None
+    extras: Dict[str, Any] = field(default_factory=dict)
+
+
+def _resolve_history_fetcher(params: SignalParams) -> Callable[[str, str, int], pd.DataFrame]:
+    if params.history_fetcher:
+        return params.history_fetcher
+    if _default_history_fetcher is not None:
+        return _default_history_fetcher
+    raise RuntimeError("No history fetcher configured for compute_signal")
+
+
+def _trace_stage(symbol: str, timeframe: str, stage: str, payload: Dict[str, Any]) -> None:
+    if not TRACE_ENABLED:
+        return
+    data = {"stage": stage, "payload": payload, "timestamp": datetime.utcnow().isoformat()}
+    try:
+        insert_signal_trace(symbol, timeframe, data, event=f"pipeline_{stage}")
+    except Exception:  # pragma: no cover - tracing is best-effort
+        PIPELINE_LOGGER.debug("Failed to insert trace stage %s", stage, exc_info=True)
+
+
+def _prepare_dataframe(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame()
+    prepared = df.copy()
+    if "time" in prepared.columns:
+        prepared = prepared.sort_values("time")
+    try:
+        prepared = as_utc_index(prepared)
+    except Exception:
+        pass
+    return prepared
+
+
+def _serialize_indicator_results(results: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    indicators_payload: Dict[str, Any] = {}
+    evaluation_payload: Dict[str, Any] = {}
+    for name, result in (results or {}).items():
+        evaluation_payload[name] = getattr(result, "direction", None)
+        values: Dict[str, Any] = {}
+        for key, value in getattr(result, "value", {}).items():
+            if isinstance(value, (int, float)):
+                try:
+                    values[key] = float(value)
+                except Exception:
+                    values[key] = safe_log_value(value)
+            else:
+                values[key] = safe_log_value(value)
+        indicators_payload[name] = values
+    return indicators_payload, evaluation_payload
+
+
+def _compute_trend_payload(df: pd.DataFrame) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"direction": None, "slope": None}
+    if df is None or df.empty:
+        return payload
+    try:
+        closes = df["close"].astype(float).tail(30)
+    except Exception:
+        return payload
+    if len(closes) < 2:
+        return payload
+    slope = float(closes.iloc[-1] - closes.iloc[0]) / max(len(closes) - 1, 1)
+    payload.update(
+        {
+            "direction": "Bullish" if slope >= 0 else "Bearish",
+            "slope": slope,
+            "last_close": float(closes.iloc[-1]),
+        }
+    )
+    return payload
+
+
+def _compute_guard_payload(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "atr_last": None,
+        "atr_mean": None,
+        "atr_ratio": None,
+        "price_action": None,
+    }
+    if df is None or df.empty:
+        return payload
+    try:
+        atr_last_val, atr_mean_val = atr_last_and_mean(
+            df,
+            length=params.get("ATR", {}).get("length", 14),
+            mean_window=50,
+            params=params,
+        )
+        atr_last_val = safe_float(atr_last_val, 0.0)
+        atr_mean_val = safe_float(atr_mean_val, 0.0)
+    except Exception:
+        atr_last_val = None
+        atr_mean_val = None
+    payload["atr_last"] = atr_last_val
+    payload["atr_mean"] = atr_mean_val
+    payload["atr_ratio"] = (
+        float(atr_last_val / atr_mean_val)
+        if atr_last_val and atr_mean_val
+        else None
+    )
+    try:
+        payload["price_action"] = price_action_direction(df, lookback=5, params=params)
+    except Exception:
+        payload["price_action"] = None
+    return payload
+
+
+def compute_signal(symbol: str, params: Optional[SignalParams] = None) -> Dict[str, Any]:
+    """Compute and persist a trading signal for a single symbol."""
+
+    params = params or SignalParams()
+    history_fn = _resolve_history_fetcher(params)
+    primary_tf = params.primary_tf or DEFAULT_TIMEFRAME
+    trend_tf = params.trend_tf or TREND_TIMEFRAME
+    guard_tf = params.guard_tf
+    count = int(params.history_count or DEFAULT_HISTORY_COUNT)
+    indicator_params = copy.deepcopy(params.indicator_params or INDICATOR_PARAMS)
+    weights = copy.deepcopy(params.weights or WEIGHTS)
+    threshold = float(params.threshold if params.threshold is not None else SIGNAL_THRESHOLD)
+
+    fetch_started = time.perf_counter()
+    df_primary = history_fn(symbol, primary_tf, count)
+    df_trend = history_fn(symbol, trend_tf, count) if trend_tf else None
+    df_guard = history_fn(symbol, guard_tf, count) if guard_tf else None
+    fetch_duration_ms = (time.perf_counter() - fetch_started) * 1000.0
+
+    _trace_stage(
+        symbol,
+        primary_tf,
+        "fetch",
+        {
+            "primary_rows": 0 if df_primary is None else len(df_primary),
+            "trend_rows": 0 if df_trend is None else len(df_trend),
+            "guard_rows": 0 if df_guard is None else len(df_guard),
+            "duration_ms": fetch_duration_ms,
+        },
+    )
+
+    primary_df = _prepare_dataframe(df_primary)
+    trend_df = _prepare_dataframe(df_trend)
+    guard_df = _prepare_dataframe(df_guard)
+
+    if primary_df.empty:
+        raise ValueError(f"No primary timeframe data available for {symbol}")
+
+    indicators = compute_indicators(primary_df, indicator_params)
+    indicator_results = evaluate_signals(primary_df, indicators, indicator_params)
+    strategy_strength = compute_strategy_strength(indicator_results, weights)
+    vote_result = compute_weighted_vote_aggregation(indicator_results, weights, threshold=threshold)
+    best = best_signal(strategy_strength)
+
+    indicators_payload, evaluation_payload = _serialize_indicator_results(indicator_results)
+
+    _trace_stage(
+        symbol,
+        primary_tf,
+        "indicators",
+        {
+            "indicator_count": len(indicator_results),
+            "vote_direction": vote_result.get("final_direction"),
+            "vote_score": vote_result.get("normalized_score"),
+        },
+    )
+
+    base_direction = (best or {}).get("direction")
+    base_strength = float((best or {}).get("strength", 0.0))
+    vote_direction = vote_result.get("final_direction", "neutral")
+    vote_strength = float(abs(vote_result.get("normalized_score", 0.0)))
+
+    provisional_direction = base_direction if base_direction in {"buy", "sell"} else vote_direction
+    if provisional_direction not in {"buy", "sell"}:
+        provisional_direction = "buy" if vote_result.get("normalized_score", 0.0) >= 0 else "sell"
+
+    trend_payload = _compute_trend_payload(trend_df)
+    guard_payload = _compute_guard_payload(guard_df, indicator_params)
+
+    alignment_bonus = 0.0
+    if trend_payload["direction"]:
+        if provisional_direction == "buy" and trend_payload["direction"] == "Bullish":
+            alignment_bonus += ALIGNMENT_BOOST_H1
+        elif provisional_direction == "sell" and trend_payload["direction"] == "Bearish":
+            alignment_bonus += ALIGNMENT_BOOST_H1
+    if guard_payload.get("price_action") == provisional_direction:
+        alignment_bonus += PRICE_ACTION_BONUS
+    atr_ratio = guard_payload.get("atr_ratio")
+    volatility_state = "unknown"
+    if atr_ratio is not None:
+        if atr_ratio < 0.8:
+            volatility_state = "calm"
+        elif atr_ratio > 2.5:
+            volatility_state = "volatile"
+        else:
+            volatility_state = "normal"
+        if 0.8 <= atr_ratio <= 1.8:
+            alignment_bonus += ATR_STABILITY_BONUS
+
+    base_score = max(base_strength, vote_strength)
+    preliminary_strength = min(100.0, base_score + alignment_bonus)
+
+    confirmation = params.mtf_confirmation
+    if confirmation is None:
+        confirmation = MultiTimeframeConfirmation()
+        params.mtf_confirmation = confirmation
+    confirmation_payload: Dict[str, Any]
+    if provisional_direction in {"buy", "sell"}:
+        confirm_result = confirmation.confirm_signal(
+            symbol=symbol,
+            timeframe=str(primary_tf).upper(),
+            direction=provisional_direction.upper(),
+            confidence=preliminary_strength,
+        )
+        confirmation_payload = {
+            "confirmed": confirm_result.confirmed,
+            "confidence_adjustment": confirm_result.confidence_adjustment,
+            "reason": confirm_result.reason,
+            "metadata": confirm_result.metadata,
+        }
+        final_strength = float(min(100.0, preliminary_strength * confirm_result.confidence_adjustment))
+    else:
+        confirmation_payload = {
+            "confirmed": False,
+            "confidence_adjustment": 1.0,
+            "reason": "neutral_direction",
+            "metadata": {},
+        }
+        final_strength = float(preliminary_strength)
+
+    confidence = max(0.0, min(1.0, final_strength / 100.0))
+    confidence_zone = get_signal_confidence_zone(final_strength)
+
+    decision_payload = {
+        "direction": provisional_direction,
+        "final_strength": final_strength,
+        "alignment_bonus": alignment_bonus,
+        "volatility_state": volatility_state,
+        "confidence": confidence,
+        "confidence_zone": confidence_zone,
+    }
+
+    _trace_stage(symbol, primary_tf, "score", {
+        "base_strength": base_strength,
+        "vote_strength": vote_strength,
+        "alignment_bonus": alignment_bonus,
+        "preliminary_strength": preliminary_strength,
+    })
+    _trace_stage(symbol, primary_tf, "confirm", confirmation_payload)
+    _trace_stage(symbol, primary_tf, "decide", decision_payload)
+
+    entry_price = float(primary_df["close"].iloc[-1])
+    timestamp = pd.Timestamp.now(tz="UTC").isoformat()
+    indicator_contributions: Dict[str, float] = {}
+    for name, details in vote_result.get("vote_breakdown", {}).items():
+        value = details.get("contribution_norm", 0.0)
+        try:
+            indicator_contributions[name] = float(value)
+        except (TypeError, ValueError):
+            indicator_contributions[name] = 0.0
+
+    contributions_data: Dict[str, Any] = {}
+    for key, value in ((best or {}).get("contributions", {}) or {}).items():
+        if isinstance(value, dict):
+            contributions_data[key] = {
+                sub_key: (float(sub_val) if isinstance(sub_val, (int, float)) else sub_val)
+                for sub_key, sub_val in value.items()
+            }
+        elif isinstance(value, (int, float)):
+            contributions_data[key] = float(value)
+        else:
+            contributions_data[key] = value
+
+    record: Dict[str, Any] = {
+        "timestamp": timestamp,
+        "symbol": symbol,
+        "timeframe": primary_tf,
+        "side": provisional_direction,
+        "strength": final_strength,
+        "strategy": params.strategy,
+        "indicators": indicators_payload,
+        "contributions": contributions_data,
+        "indicator_contributions": indicator_contributions,
+        "signal_type": provisional_direction.upper(),
+        "primary_timeframe": primary_tf,
+        "confirmation_timeframe": guard_tf,
+        "trend_timeframe": trend_tf,
+        "h1_trend_direction": trend_payload.get("direction"),
+        "h4_trend_direction": trend_payload.get("direction"),
+        "alignment_boost": alignment_bonus,
+        "final_signal_strength": final_strength,
+        "entry_price": entry_price,
+        "stop_loss_price": None,
+        "take_profit_price": None,
+        "stop_loss_distance_pips": None,
+        "take_profit_distance_pips": None,
+        "risk_reward_ratio": None,
+        "volatility_state": volatility_state,
+        "is_valid": True,
+        "direction_confidence": f"{confidence * 100:.1f}% ({confidence_zone})",
+        "direction_reason": f"trend={trend_payload.get('direction')}, guard={guard_payload.get('price_action')}",
+    }
+
+    snapshot_payload = {
+        "timestamp": timestamp,
+        "symbol": symbol,
+        "timeframe": primary_tf,
+        "indicators": indicators_payload,
+        "evaluation": evaluation_payload,
+        "strategy": params.strategy,
+    }
+
+    try:
+        insert_signal(record)
+        insert_indicator_snapshot(snapshot_payload)
+    except Exception as exc:
+        _trace_stage(symbol, primary_tf, "persist", {"status": "error", "error": str(exc)})
+        raise
+
+    _trace_stage(symbol, primary_tf, "persist", {"status": "ok", "strength": final_strength})
+
+    PIPELINE_LOGGER.info(
+        {
+            "event": "signal_computed",
+            "symbol": symbol,
+            "timeframe": primary_tf,
+            "direction": provisional_direction,
+            "strength": final_strength,
+            "confidence": confidence,
+            "volatility_state": volatility_state,
+        }
+    )
+
+    result = dict(record)
+    result.update(
+        {
+            "confidence": confidence,
+            "confidence_zone": confidence_zone,
+            "trend": trend_payload,
+            "guard": guard_payload,
+            "vote": vote_result,
+            "confirmation": confirmation_payload,
+            "snapshot": snapshot_payload,
+            "persisted": True,
+        }
+    )
+    return result
+
+
+def compute_for_symbols(symbols: Iterable[str], params: Optional[SignalParams] = None) -> List[Dict[str, Any]]:
+    """Compute signals for a collection of symbols sequentially."""
+
+    results: List[Dict[str, Any]] = []
+    params = params or SignalParams()
+    for symbol in symbols:
+        try:
+            signal = compute_signal(symbol, params=params)
+        except Exception as exc:
+            PIPELINE_LOGGER.error(
+                "Failed to compute signal", extra={"symbol": symbol, "error": str(exc)}
+            )
+            _trace_stage(
+                symbol,
+                params.primary_tf or DEFAULT_TIMEFRAME,
+                "error",
+                {"error": str(exc)},
+            )
+        else:
+            results.append(signal)
+    return results
 
 
 def _calibrate_conf(strength: float, strong_count: int) -> float:
